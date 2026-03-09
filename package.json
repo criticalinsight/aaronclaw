@@ -1,0 +1,26 @@
+{
+  "name": "aaronclaw",
+  "version": "1.0.0",
+  "description": "Cloudflare-native OpenClaw bootstrap with a Durable Object seam for AaronDB Edge.",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "wrangler dev",
+    "validate:config": "node scripts/validate-config.mjs",
+    "deploy:prep": "node scripts/render-deploy-config.mjs",
+    "deploy:dry-run": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc --dry-run",
+    "deploy": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250303.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.0",
+    "wrangler": "^4.6.0"
+  }
+}

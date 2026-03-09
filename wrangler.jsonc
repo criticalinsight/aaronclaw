@@ -1,0 +1,39 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aaronclaw",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-03-09",
+  "observability": {
+    "enabled": true
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "vars": {
+    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SESSION_RUNTIME",
+        "class_name": "SessionRuntime"
+      }
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "AARONDB",
+      "database_name": "aaronclaw-aarondb",
+      // Local development can use preview_database_id as-is. For a real deploy,
+      // inject the remote UUID with AARONCLAW_D1_DATABASE_ID via npm run deploy:prep.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "aaronclaw-local"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "bootstrap-v1",
+      "new_sqlite_classes": ["SessionRuntime"]
+    }
+  ]
+}
