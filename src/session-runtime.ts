@@ -1,9 +1,10 @@
 import {
   type JsonValue,
-  AaronDbEdgeSessionRepository,
   type JsonObject,
-  type MessageRole
+  type MessageRole,
+  type SessionStateRepository
 } from "./session-state";
+import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { generateAssistantReply } from "./assistant";
 
 function json(data: unknown, status = 200): Response {
@@ -16,7 +17,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 export class SessionRuntime {
-  private repository: AaronDbEdgeSessionRepository | null = null;
+  private repository: SessionStateRepository | null = null;
   private activeSessionId: string | null = null;
 
   constructor(
@@ -178,9 +179,9 @@ export class SessionRuntime {
     return json({ error: "not found" }, 404);
   }
 
-  private getRepository(sessionId: string): AaronDbEdgeSessionRepository {
+  private getRepository(sessionId: string): SessionStateRepository {
     if (!this.repository || this.activeSessionId !== sessionId) {
-      this.repository = new AaronDbEdgeSessionRepository(this.env.AARONDB, sessionId);
+      this.repository = mountAaronDbEdgeSessionRuntime(this.env, this.state, sessionId).repository;
       this.activeSessionId = sessionId;
     }
 

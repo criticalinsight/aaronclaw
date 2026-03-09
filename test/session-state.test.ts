@@ -288,6 +288,82 @@ describe("worker session routes", () => {
     expect(recallBody.matches[0]?.preview).toContain("AaronDB replay path");
   });
 
+  it("preserves the init, messages, and tool-events session API flow", async () => {
+    const { env } = createEnv();
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", { method: "POST" }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as {
+      sessionId: string;
+      session: { id: string; events: unknown[] };
+    };
+
+    const messageResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          role: "user",
+          content: "Store this message through the mounted AaronDB seam."
+        })
+      }),
+      env as Env
+    );
+    const messageBody = (await messageResponse.json()) as {
+      session: { messages: Array<{ role: string; content: string }> };
+    };
+
+    const toolEventResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/tool-events`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          toolName: "search",
+          summary: "Stored a tool event through the mounted AaronDB seam."
+        })
+      }),
+      env as Env
+    );
+    const toolEventBody = (await toolEventResponse.json()) as {
+      session: { toolEvents: Array<{ toolName: string; summary: string }> };
+    };
+
+    const stateResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}`),
+      env as Env
+    );
+    const stateBody = (await stateResponse.json()) as {
+      session: {
+        id: string;
+        messages: Array<{ role: string; content: string }>;
+        toolEvents: Array<{ toolName: string; summary: string }>;
+      };
+    };
+
+    expect(created.status).toBe(201);
+    expect(createdBody.session.id).toBe(createdBody.sessionId);
+    expect(messageResponse.status).toBe(201);
+    expect(messageBody.session.messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "Store this message through the mounted AaronDB seam."
+      })
+    ]);
+    expect(toolEventResponse.status).toBe(201);
+    expect(toolEventBody.session.toolEvents).toEqual([
+      expect.objectContaining({
+        toolName: "search",
+        summary: "Stored a tool event through the mounted AaronDB seam."
+      })
+    ]);
+    expect(stateResponse.status).toBe(200);
+    expect(stateBody.session).toMatchObject({ id: createdBody.sessionId });
+    expect(stateBody.session.messages).toHaveLength(1);
+    expect(stateBody.session.toolEvents).toHaveLength(1);
+  });
+
   it("returns the deterministic fallback when Workers AI is not bound", async () => {
     const { env } = createEnv();
 
