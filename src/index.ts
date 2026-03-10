@@ -1,11 +1,33 @@
 import {
   buildBootstrapStatus,
+  parseHandRoute,
+  parseSkillRoute,
   parseSessionRoute,
   renderLandingPage
 } from "./routes";
-import { getConfiguredModel } from "./assistant";
-import { runScheduledMaintenance } from "./reflection-engine";
+import {
+  listBundledHands,
+  readBundledHandState,
+  runScheduledHands,
+  setBundledHandLifecycle
+} from "./hands-runtime";
+import {
+  buildModelRegistry,
+  normalizeModelSelectionId,
+  resolveModelSelection
+} from "./model-registry";
+import {
+  readProviderKeyStatus,
+  setProtectedProviderKey,
+  validateConfiguredProviderKey,
+  validateProviderApiKey
+} from "./provider-key-store";
+import {
+  readPersistedModelSelection,
+  setPersistedModelSelection
+} from "./model-selection-store";
 import { SessionRuntime } from "./session-runtime";
+import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
 import {
   buildTelegramMessageMetadata,
   buildTelegramSessionId,
@@ -44,18 +66,26 @@ function isAuthorized(request: Request, env: Env): boolean {
   return header === `Bearer ${expected}`;
 }
 
-function buildRuntimeOptions(env: Env) {
+async function buildRuntimeOptions(env: Env) {
+  const { selection } = await readResolvedModelSelection(env);
+
   return {
     authRequired: isAuthConfigured(env),
-    defaultModel: getConfiguredModel(env),
+    defaultProvider: selection.requestedModel?.provider ?? null,
+    defaultModel: selection.requestedModel?.model ?? null,
+    activeProvider: selection.activeModel?.provider ?? null,
+    activeModel: selection.activeModel?.model ?? null,
+    selectionFallbackReason: selection.selectionFallbackReason,
     hasAiBinding: Boolean(env.AI)
   };
 }
 
-function buildRuntimeStatus(env: Env) {
-  return buildBootstrapStatus({
-    ...buildRuntimeOptions(env)
-  });
+function buildRuntimeStatus(options: Awaited<ReturnType<typeof buildRuntimeOptions>>) {
+  return buildBootstrapStatus(options);
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function unauthorized(): Response {
@@ -203,13 +233,264 @@ async function handleTelegramWebhook(request: Request, env: Env): Promise<Respon
   }
 }
 
+async function buildModelSelectionPayload(env: Env) {
+  const { persistedModelId, selection } = await readResolvedModelSelection(env);
+
+  return {
+    persistedModelId,
+    requestedModelId: selection.requestedModelId,
+    activeModelId: selection.activeModelId,
+    selectionFallbackReason: selection.selectionFallbackReason,
+    models: selection.models
+  };
+}
+
+async function readResolvedModelSelection(env: Env) {
+  const persistedModelId = await readPersistedModelSelection(env.AARONDB);
+  const geminiKeyStatus = await readProviderKeyStatus({
+    env,
+    database: env.AARONDB,
+    provider: "gemini"
+  });
+  const selection = resolveModelSelection(env, persistedModelId, {
+    geminiConfigured: geminiKeyStatus.configured,
+    geminiValidationStatus: geminiKeyStatus.validation.status
+  });
+
+  return {
+    persistedModelId,
+    selection
+  };
+}
+
+async function buildKeyManagementPayload(env: Env) {
+  return {
+    providers: [
+      await readProviderKeyStatus({
+        env,
+        database: env.AARONDB,
+        provider: "gemini"
+      })
+    ]
+  };
+}
+
+function protectedKeyManagementUnavailable(): Response {
+  return json(
+    {
+      error:
+        "/api/key requires APP_AUTH_TOKEN to be configured so secret management stays admin-only and protected key material can be encrypted at rest."
+    },
+    412
+  );
+}
+
+async function handleModelRoute(request: Request, env: Env): Promise<Response> {
+  if (request.method === "GET") {
+    return json(await buildModelSelectionPayload(env));
+  }
+
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => null);
+
+    if (!isJsonObject(body) || typeof body.modelId !== "string") {
+      return json({ error: "modelId is required" }, 400);
+    }
+
+    const modelId = normalizeModelSelectionId(body.modelId);
+    const geminiKeyStatus = await readProviderKeyStatus({
+      env,
+      database: env.AARONDB,
+      provider: "gemini"
+    });
+    const models = buildModelRegistry(env, {
+      geminiConfigured: geminiKeyStatus.configured,
+      geminiValidationStatus: geminiKeyStatus.validation.status
+    });
+    const model = models.find(
+      (candidate) => candidate.id === modelId || candidate.aliases.includes(modelId)
+    );
+
+    if (!model) {
+      return json(
+        {
+          error: `unsupported model selection: ${modelId}`,
+          selectableModelIds: models.filter((candidate) => candidate.selectable).map((candidate) => candidate.id)
+        },
+        400
+      );
+    }
+
+    if (!model.selectable) {
+      return json(
+        {
+          error: `model ${modelId} is not currently selectable`,
+          model
+        },
+        409
+      );
+    }
+
+    await setPersistedModelSelection(env.AARONDB, modelId);
+    return json(await buildModelSelectionPayload(env));
+  }
+
+  return json({ error: "method not allowed", methods: ["GET", "POST"] }, 405);
+}
+
+async function handleKeyRoute(request: Request, env: Env): Promise<Response> {
+  if (!isAuthConfigured(env)) {
+    return protectedKeyManagementUnavailable();
+  }
+
+  if (request.method === "GET") {
+    return json(await buildKeyManagementPayload(env));
+  }
+
+  if (request.method !== "POST") {
+    return json({ error: "method not allowed", methods: ["GET", "POST"] }, 405);
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!isJsonObject(body) || body.provider !== "gemini") {
+    return json({ error: "provider is required and must currently be 'gemini'" }, 400);
+  }
+
+  const action = body.action === "validate" ? "validate" : "set";
+  if (action === "validate") {
+    const provider = await validateConfiguredProviderKey({
+      env,
+      database: env.AARONDB,
+      provider: "gemini"
+    });
+
+    if (!provider.configured) {
+      return json({ error: "no configured Gemini key is available to validate", provider }, 404);
+    }
+
+    return json({ provider });
+  }
+
+  if (typeof body.apiKey !== "string") {
+    return json({ error: "apiKey is required when setting a provider key" }, 400);
+  }
+
+  let validation;
+  try {
+    validation = await validateProviderApiKey("gemini", body.apiKey);
+  } catch (error) {
+    return json(
+      {
+        error: error instanceof Error ? error.message : "provider key validation failed"
+      },
+      400
+    );
+  }
+
+  if (validation.status !== "valid") {
+    return json(
+      {
+        error: "Gemini key validation failed; the key was not stored.",
+        provider: {
+          provider: "gemini",
+          providerLabel: "Google Gemini",
+          configured: false,
+          source: "none",
+          maskedKey: null,
+          fingerprint: null,
+          updatedAt: null,
+          storage: "none",
+          validation
+        }
+      },
+      validation.status === "invalid" ? 400 : 502
+    );
+  }
+
+  const provider = await setProtectedProviderKey({
+    env,
+    database: env.AARONDB,
+    provider: "gemini",
+    apiKey: body.apiKey,
+    validation
+  });
+  return json({ provider });
+}
+
+async function handleHandRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const route = parseHandRoute(pathname);
+
+  if (!route) {
+    return null;
+  }
+
+  if (route.action === "list") {
+    if (request.method !== "GET") {
+      return json({ error: "method not allowed", methods: ["GET"] }, 405);
+    }
+
+    return json({ hands: await listBundledHands({ env }) });
+  }
+
+  if (!route.handId) {
+    return json({ error: "handId is required" }, 400);
+  }
+
+  if (route.action === "detail") {
+    if (request.method !== "GET") {
+      return json({ error: "method not allowed", methods: ["GET"] }, 405);
+    }
+
+    const hand = await readBundledHandState({ env, handId: route.handId });
+    return hand ? json({ hand }) : json({ error: "hand not found" }, 404);
+  }
+
+  if (request.method !== "POST") {
+    return json({ error: "method not allowed", methods: ["POST"] }, 405);
+  }
+
+  const hand = await setBundledHandLifecycle({
+    env,
+    handId: route.handId,
+    action: route.action
+  });
+  return hand ? json({ hand }) : json({ error: "hand not found" }, 404);
+}
+
+async function handleSkillRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
+  const route = parseSkillRoute(pathname);
+
+  if (!route) {
+    return null;
+  }
+
+  if (route.action === "list") {
+    if (request.method !== "GET") {
+      return json({ error: "method not allowed", methods: ["GET"] }, 405);
+    }
+
+    return json({ skills: await listBundledSkills({ env }) });
+  }
+
+  if (!route.skillId) {
+    return json({ error: "skillId is required" }, 400);
+  }
+
+  if (request.method !== "GET") {
+    return json({ error: "method not allowed", methods: ["GET"] }, 405);
+  }
+
+  const skill = await readBundledSkillManifest({ env, skillId: route.skillId });
+  return skill ? json({ skill }) : json({ error: "skill not found" }, 404);
+}
+
 export { SessionRuntime };
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const runtimeOptions = buildRuntimeOptions(env);
-    const status = buildRuntimeStatus(env);
+    const runtimeOptions = await buildRuntimeOptions(env);
+    const status = buildRuntimeStatus(runtimeOptions);
     const isHeadRequest = request.method === "HEAD";
 
     if ((request.method === "GET" || isHeadRequest) && url.pathname === "/") {
@@ -236,6 +517,24 @@ export default {
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) {
       return unauthorized();
+    }
+
+    if (url.pathname === "/api/model") {
+      return handleModelRoute(request, env);
+    }
+
+    if (url.pathname === "/api/key") {
+      return handleKeyRoute(request, env);
+    }
+
+    const skillRouteResponse = await handleSkillRoute(request, env, url.pathname);
+    if (skillRouteResponse) {
+      return skillRouteResponse;
+    }
+
+    const handRouteResponse = await handleHandRoute(request, env, url.pathname);
+    if (handRouteResponse) {
+      return handRouteResponse;
     }
 
     if (request.method === "POST" && url.pathname === "/api/sessions") {
@@ -306,6 +605,16 @@ export default {
           "GET /",
           "GET /health",
           "POST /telegram/webhook",
+          "GET /api/model",
+          "POST /api/model",
+          "GET /api/key",
+          "POST /api/key",
+          "GET /api/skills",
+          "GET /api/skills/:id",
+          "GET /api/hands",
+          "GET /api/hands/:id",
+          "POST /api/hands/:id/activate",
+          "POST /api/hands/:id/pause",
           "POST /api/sessions",
           "GET /api/sessions/:id",
           "POST /api/sessions/:id/chat",
@@ -319,7 +628,7 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     try {
-      await runScheduledMaintenance({
+      await runScheduledHands({
         env,
         cron: controller.cron,
         timestamp: new Date(controller.scheduledTime).toISOString()

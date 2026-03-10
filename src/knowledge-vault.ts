@@ -86,12 +86,12 @@ export interface KnowledgeVaultMatch {
   createdAt: string;
   preview: string;
   score: number;
-  source: "vectorize" | "d1-compat";
+  source: "vectorize" | "d1-compat" | "skill-disabled";
 }
 
 export interface KnowledgeVaultResult {
   matches: KnowledgeVaultMatch[];
-  source: "vectorize" | "d1-compat";
+  source: "vectorize" | "d1-compat" | "skill-disabled";
 }
 
 export async function queryKnowledgeVault(input: {

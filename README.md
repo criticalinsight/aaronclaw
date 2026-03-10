@@ -1,8 +1,10 @@
 # aaronclaw
 
 AaronClaw is a Cloudflare-native OpenClaw-style assistant with a browser-first
-control surface, a standard Worker + Durable Object runtime, and an AaronDB-style
-immutable D1 fact log as the source of truth for session memory.
+control surface, a standard Worker + Durable Object runtime, a Cloudflare-native
+hands runtime, manifest-driven bundled skills, capability-gated tool/audit
+history, and an AaronDB-style immutable D1 fact log as the source of truth for
+session memory.
 
 The current live deployment is:
 
@@ -22,18 +24,32 @@ Use the smallest doc that answers your question:
 - [`docs/architecture.md`](docs/architecture.md) — architecture decision and
   reuse boundary relative to `cloudflare/moltworker`.
 
-## What is deployed now
+## Current shipped posture
 
-As verified against the live Worker on 2026-03-09:
+In the current codebase and live deployment (`/health`):
 
-- `GET /health` reports `authMode: none` and `assistantRuntime: workers-ai`.
-- `defaultModel` is `@cf/meta/llama-3.1-8b-instruct`.
-- `HEAD /` and `HEAD /health` both return `200`, so simple probes work.
-- A full remote smoke flow passed: create session → chat → reload persisted
-  state → recall persisted matches.
+- `GET /health` reports `authMode: bearer-token`; the landing page and `/health`
+  stay public, while `/api/*` stays bearer-protected.
+- `assistantRuntime` and `activeAssistantRuntime` are both Gemini with
+  `defaultModel` / `activeModel` set to `gemini-3.1-pro-preview`.
+- `skillRuntime: manifest-driven`, `skillInstallScope: bundled-local-only`,
+  `toolPolicyRuntime: capability-gated`, and
+  `toolAuditHistory: structured-session-and-hand-history` describe the current
+  hands/skills rollout.
+- Bundled hands stay Cloudflare-native. The current hand bundle is the
+  `scheduled-maintenance` cron-driven hand, with protected activate/pause
+  controls plus persisted run/audit history.
+- Bundled skills are manifest-driven and currently ship as
+  `aarondb-research` (session recall + knowledge vault) and `gemini-review`
+  (session-only review path that requires configured Gemini key material).
+- Skill selection for chat is API-driven per turn via `skillId`; the landing
+  page currently exposes hands/skills inspection and hand controls, not a skill
+  picker.
+- `HEAD /` and `HEAD /health` are kept probe-safe.
+- Session create → chat → reload → recall remains the expected smoke path.
 
-That means the public deployment is currently usable without an auth token.
-Treat that as a personal dogfood posture, not a hardened multi-user setup.
+The production posture is still single-operator and token-gated, not a hardened
+multi-user deployment.
 
 ## Quick local loop
 
@@ -85,10 +101,19 @@ validation notes, and troubleshooting guidance.
 
 - `GET /` serves the browser UI.
 - `GET /health` reports runtime, auth, and assistant status.
+- `GET /api/model` and `POST /api/model` inspect or persist the operator model
+  route.
+- `GET /api/key` and `POST /api/key` inspect or manage protected Gemini key
+  state.
+- `GET /api/skills` and `GET /api/skills/:id` expose manifest-driven bundled
+  skills with readiness and declared tool policies.
+- `GET /api/hands`, `GET /api/hands/:id`, `POST /api/hands/:id/activate`, and
+  `POST /api/hands/:id/pause` expose the Cloudflare-native hands runtime.
 - `POST /api/sessions` creates a session.
 - `GET /api/sessions/:id` reloads a projected session snapshot.
 - `POST /api/sessions/:id/chat` appends a user message, generates an assistant
-  reply, and persists both turns.
+  reply, and persists both turns. Chat can optionally opt into one bundled
+  skill for that turn with `skillId`.
 - `POST /api/sessions/:id/messages` and `POST /api/sessions/:id/tool-events`
   are the lower-level append endpoints.
 - `GET /api/sessions/:id/recall?q=...` performs AaronDB-style recall over the
@@ -115,8 +140,9 @@ See [`docs/runtime.md`](docs/runtime.md) for request semantics and browser usage
   `criticalinsight/aarondb-edge` (`master@dafbba3f02da02c8812ef1026deb2062c41ea96b`).
 - `src/aarondb-edge-substrate.ts` exposes the vendored runtime's binding map,
   route surface, and imported FFI utilities to AaronClaw code.
-- Current seam mapping is `AARONDB_STATE -> SESSION_RUNTIME` and `DB -> AARONDB`;
-  `CONFIG_KV`, `VECTOR_INDEX`, and `ARCHIVE` remain explicit next-wave mounts.
+- Current seam mapping is `AARONDB_STATE -> SESSION_RUNTIME`, `DB -> AARONDB`,
+  `AI -> AI`, and `VECTOR_INDEX -> VECTOR_INDEX`; `CONFIG_KV` and `ARCHIVE`
+  remain explicit next-wave mounts.
 - Build implication: upstream `src/index.mjs` expects generated Gleam JS under
   `build/dev/javascript`, so the next wave must add that bridge before swapping
   AaronClaw's live repository implementation.
@@ -130,6 +156,14 @@ See [`docs/runtime.md`](docs/runtime.md) for request semantics and browser usage
 - `src/routes.ts` — landing page HTML/JS and runtime status metadata.
 - `src/session-runtime.ts` — session Durable Object runtime and API handlers.
 - `src/session-state.ts` — immutable fact append, projection replay, and recall.
+- `src/hands-runtime.ts` — bundled Cloudflare-native hands lifecycle, cron
+  execution, run summaries, and audit history.
+- `src/skills-runtime.ts` — bundled manifest-driven skills, readiness
+  resolution, and skill prompt/runtime metadata.
+- `src/tool-policy.ts` — capability/policy catalog for skill-declared,
+  operator-only, and scheduled tools.
+- `src/knowledge-vault.ts` — cross-session knowledge-vault recall with
+  Vectorize-first lookup and D1-compatible fallback ranking.
 - `src/assistant.ts` — Workers AI call path plus deterministic fallback.
 - `migrations/0001_aarondb_edge.sql` — D1 schema for the fact log.
 - `vendor/aarondb-edge/` — vendored upstream AaronDB Edge runtime slice

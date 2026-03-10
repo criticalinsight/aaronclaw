@@ -11,6 +11,12 @@ import { resolveModelSelection } from "./model-registry";
 import { readPersistedModelSelection } from "./model-selection-store";
 import { readProviderKeyStatus, resolveProviderApiKey } from "./provider-key-store";
 import { reflectSession } from "./reflection-engine";
+import {
+  buildSkillPromptAdditions,
+  buildSkillRuntimeMetadata,
+  readBundledSkillManifest
+} from "./skills-runtime";
+import { buildToolAuditRecord, isSkillToolAllowed } from "./tool-policy";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -89,23 +95,93 @@ export class SessionRuntime {
         return json({ error: "content must not be empty" }, 400);
       }
 
+      const requestedSkillId = normalizeOptionalString(body.skillId);
+      const skill = requestedSkillId
+        ? await readBundledSkillManifest({ env: this.env, skillId: requestedSkillId })
+        : null;
+
+      if (requestedSkillId && !skill) {
+        return json({ error: `skill not found: ${requestedSkillId}` }, 404);
+      }
+
+      if (skill && skill.readiness !== "ready") {
+        return json(
+          {
+            error: `skill ${skill.id} is missing required secrets`,
+            skill
+          },
+          409
+        );
+      }
+
       try {
+        const toolAuditTrail: JsonObject[] = [];
+        const skillMetadata = skill ? buildSkillRuntimeMetadata(skill) : null;
         const userSession = await repository.appendMessage({
           timestamp: new Date().toISOString(),
           role: "user",
           content,
-          metadata: isJsonObject(body.metadata) ? body.metadata : undefined
+          metadata: mergeMetadata(isJsonObject(body.metadata) ? body.metadata : undefined, skillMetadata)
         });
-        const recallMatches = await repository.recall({
-          query: content,
-          limit: 3
-        });
-        const knowledgeVault = await queryKnowledgeVault({
-          env: this.env,
-          sessionId,
-          query: content,
-          limit: 3
-        });
+        const recallAllowed = isSkillToolAllowed("session-recall", skill?.declaredTools);
+        const recallMatches = recallAllowed
+          ? await repository.recall({
+              query: content,
+              limit: 3
+            })
+          : [];
+        toolAuditTrail.push(
+          buildToolAuditRecord({
+            toolId: "session-recall",
+            actor: "session-runtime",
+            scope: "session",
+            outcome: recallAllowed ? "succeeded" : "blocked",
+            timestamp: new Date().toISOString(),
+            sessionId,
+            skillId: skill?.id,
+            detail: recallAllowed
+              ? `Resolved ${recallMatches.length} session recall matches for the live chat turn.`
+              : `Skill ${skill?.id ?? "default"} does not declare session-recall, so live recall was skipped.`,
+            extra: {
+              matchedCount: recallMatches.length,
+              inputLength: content.length
+            }
+          })
+        );
+        const knowledgeVaultAllowed =
+          skill?.memoryScope === "session-only"
+            ? false
+            : isSkillToolAllowed("knowledge-vault", skill?.declaredTools);
+        const knowledgeVault =
+          !knowledgeVaultAllowed
+            ? { matches: [], source: "skill-disabled" as const }
+            : await queryKnowledgeVault({
+                env: this.env,
+                sessionId,
+                query: content,
+                limit: 3
+              });
+        toolAuditTrail.push(
+          buildToolAuditRecord({
+            toolId: "knowledge-vault",
+            actor: "session-runtime",
+            scope: "session",
+            outcome: knowledgeVaultAllowed ? "succeeded" : "blocked",
+            timestamp: new Date().toISOString(),
+            sessionId,
+            skillId: skill?.id,
+            detail: knowledgeVaultAllowed
+              ? `Knowledge vault resolved ${knowledgeVault.matches.length} matches via ${knowledgeVault.source}.`
+              : skill?.memoryScope === "session-only"
+                ? `Skill ${skill.id} restricts memory to the current session, so knowledge-vault access stayed disabled.`
+                : `Skill ${skill?.id ?? "default"} does not declare knowledge-vault, so cross-session recall was skipped.`,
+            extra: {
+              inputLength: content.length,
+              matchedCount: knowledgeVault.matches.length,
+              source: knowledgeVault.source
+            }
+          })
+        );
         const persistedModelId = await readPersistedModelSelection(this.env.AARONDB);
         const geminiKeyStatus = await readProviderKeyStatus({
           env: this.env,
@@ -116,6 +192,25 @@ export class SessionRuntime {
           geminiConfigured: geminiKeyStatus.configured,
           geminiValidationStatus: geminiKeyStatus.validation.status
         });
+        toolAuditTrail.push(
+          buildToolAuditRecord({
+            toolId: "model-selection",
+            actor: "session-runtime",
+            scope: "session",
+            outcome: "succeeded",
+            timestamp: new Date().toISOString(),
+            sessionId,
+            skillId: skill?.id,
+            detail: modelSelection.activeModelId
+              ? `Resolved active assistant route ${modelSelection.activeModelId}.`
+              : "No selectable assistant route was resolved, so deterministic fallback remains active.",
+            extra: {
+              requestedModelId: modelSelection.requestedModelId ?? null,
+              activeModelId: modelSelection.activeModelId ?? null,
+              selectionFallbackReason: modelSelection.selectionFallbackReason ?? null
+            }
+          })
+        );
         const geminiApiKey =
           geminiKeyStatus.validation.status === "valid"
             ? await resolveProviderApiKey({
@@ -132,7 +227,8 @@ export class SessionRuntime {
           recallMatches,
           knowledgeVaultMatches: knowledgeVault.matches,
           primaryRoute: buildAssistantRoute(modelSelection.activeModel, geminiApiKey),
-          fallbackRoute: buildFallbackAssistantRoute(modelSelection, geminiApiKey)
+          fallbackRoute: buildFallbackAssistantRoute(modelSelection, geminiApiKey),
+          promptAdditions: skill ? buildSkillPromptAdditions(skill) : undefined
         });
         const session = await repository.appendMessage({
           timestamp: new Date().toISOString(),
@@ -156,7 +252,9 @@ export class SessionRuntime {
               : {}),
             ...(assistant.fallbackDetail
               ? { fallbackDetail: assistant.fallbackDetail }
-              : {})
+              : {}),
+            toolAuditTrail,
+            ...(skillMetadata ?? {})
           }
         });
 
@@ -308,12 +406,27 @@ function parseOptionalInteger(value: string | null): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function normalizeOptionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
 function isMessageRole(value: unknown): value is MessageRole {
   return value === "user" || value === "assistant";
 }
 
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeMetadata(base: JsonObject | undefined, extra: JsonObject | null): JsonObject | undefined {
+  if (!extra) {
+    return base;
+  }
+
+  return {
+    ...(base ?? {}),
+    ...extra
+  };
 }
 
 function handleRepositoryError(error: unknown): Response {

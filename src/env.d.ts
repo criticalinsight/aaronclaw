@@ -18,6 +18,7 @@ interface Env {
   AARONDB: D1Database;
   AARONDB_STATE?: DurableObjectNamespace;
   ARCHIVE?: R2Bucket;
+  GEMINI_API_KEY?: string;
   AI?: WorkersAiBinding;
   AI_MODEL?: string;
   APP_AUTH_TOKEN?: string;

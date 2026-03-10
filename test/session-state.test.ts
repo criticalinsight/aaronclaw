@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import worker, { SessionRuntime } from "../src/index";
 import { queryKnowledgeVault } from "../src/knowledge-vault";
+import {
+  readPersistedModelSelection,
+  setPersistedModelSelection
+} from "../src/model-selection-store";
+import { readProviderKeyStatus } from "../src/provider-key-store";
 import { reflectSession } from "../src/reflection-engine";
 import { AaronDbEdgeSessionRepository } from "../src/session-state";
 import { buildTelegramSessionId } from "../src/telegram";
@@ -53,12 +58,48 @@ class FakeD1Database {
       throw new Error(`Unsupported query: ${sql}`);
     }
 
-    const [sessionId] = params as [string];
-    const excludeSession = sql.includes("session_id != ?");
+    let parameterIndex = 0;
+    let rows = [...this.rows];
 
-    return this.rows
-      .filter((row) => (excludeSession ? row.session_id !== sessionId : row.session_id === sessionId))
-      .sort((left, right) => left.tx - right.tx || left.tx_index - right.tx_index) as T[];
+    if (sql.includes("session_id != ?")) {
+      const sessionId = String(params[parameterIndex++] ?? "");
+      rows = rows.filter((row) => row.session_id !== sessionId);
+    } else if (sql.includes("session_id = ?")) {
+      const sessionId = String(params[parameterIndex++] ?? "");
+      rows = rows.filter((row) => row.session_id === sessionId);
+    }
+
+    if (sql.includes("entity = ?")) {
+      const entity = String(params[parameterIndex++] ?? "");
+      rows = rows.filter((row) => row.entity === entity);
+    }
+
+    if (sql.includes("attribute = ?")) {
+      const attribute = String(params[parameterIndex++] ?? "");
+      rows = rows.filter((row) => row.attribute === attribute);
+    }
+
+    rows.sort((left, right) => {
+      if (sql.includes("ORDER BY tx DESC")) {
+        return right.tx - left.tx || right.tx_index - left.tx_index;
+      }
+
+      return left.tx - right.tx || left.tx_index - right.tx_index;
+    });
+
+    if (sql.includes("LIMIT 1")) {
+      rows = rows.slice(0, 1);
+    }
+
+    if (sql.includes("SELECT value_json")) {
+      return rows.map((row) => ({ value_json: row.value_json } as T));
+    }
+
+    if (sql.includes("SELECT tx")) {
+      return rows.map((row) => ({ tx: row.tx } as T));
+    }
+
+    return rows as T[];
   }
 
   execute(sql: string, params: unknown[]) {
@@ -263,6 +304,7 @@ class FakeVectorizeIndex {
 function createEnv(options: {
   appAuthToken?: string;
   aiMode?: "success" | "throw" | "empty";
+  geminiApiKey?: string;
   telegramBotToken?: string;
   telegramWebhookSecret?: string;
   vectorizeMode?: "success" | "throw";
@@ -273,6 +315,7 @@ function createEnv(options: {
     AI: options.aiMode ? new FakeAiBinding(options.aiMode) : undefined,
     AI_MODEL: "@cf/meta/test-model",
     APP_AUTH_TOKEN: options.appAuthToken,
+    GEMINI_API_KEY: options.geminiApiKey,
     TELEGRAM_BOT_TOKEN: options.telegramBotToken,
     TELEGRAM_WEBHOOK_SECRET: options.telegramWebhookSecret,
     VECTOR_INDEX: options.vectorizeMode
@@ -853,6 +896,648 @@ describe("worker session routes", () => {
     );
   });
 
+  it("lists model availability and the active selection through the operator model route", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        headers: {
+          authorization: "Bearer letmein"
+        }
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      persistedModelId: string | null;
+      requestedModelId: string | null;
+      activeModelId: string | null;
+      selectionFallbackReason: string | null;
+      models: Array<{
+        id: string;
+        provider: string;
+        aliases: string[];
+        selectable: boolean;
+        availabilityStatus: string;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.persistedModelId).toBeNull();
+    expect(body.requestedModelId).toBe("gemini:gemini-3.1-pro-preview");
+    expect(body.activeModelId).toBe("workers-ai:@cf/meta/test-model");
+    expect(body.selectionFallbackReason).toBe("requested-model-unavailable");
+    expect(body.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "gemini:gemini-3.1-pro-preview",
+          provider: "gemini",
+          aliases: ["gemini:gemini-3.1-pro-flash-preview"],
+          selectable: false,
+          availabilityStatus: "missing-key"
+        }),
+        expect.objectContaining({
+          id: "workers-ai:@cf/meta/test-model",
+          provider: "workers-ai",
+          aliases: [],
+          selectable: true,
+          availabilityStatus: "selectable"
+        })
+      ])
+    );
+  });
+
+  it("requires APP_AUTH_TOKEN before protected provider key management can be used", async () => {
+    const { env } = createEnv();
+
+    const response = await worker.fetch(new Request("https://aaronclaw.test/api/key"), env as Env);
+    const body = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(412);
+    expect(body.error).toContain("APP_AUTH_TOKEN");
+  });
+
+  it("stores a validated Gemini key via the protected key route without echoing the raw secret", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+    const geminiFetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+    const rawKey = "gemini-secret-1234";
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: rawKey })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      provider: {
+        configured: boolean;
+        source: string;
+        maskedKey: string | null;
+        validation: { status: string; detail: string | null };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.provider).toMatchObject({
+      configured: true,
+      source: "protected-store",
+      maskedKey: "••••••••1234",
+      validation: {
+        status: "valid"
+      }
+    });
+    expect(JSON.stringify(body)).not.toContain(rawKey);
+    expect(String(geminiFetch.mock.calls[0]?.[0] ?? "")).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1"
+    );
+    expect(String(geminiFetch.mock.calls[0]?.[0] ?? "")).not.toContain(rawKey);
+    expect(new Headers(geminiFetch.mock.calls[0]?.[1]?.headers).get("x-goog-api-key")).toBe(rawKey);
+
+    const modelResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        headers: {
+          authorization: "Bearer letmein"
+        }
+      }),
+      env as Env
+    );
+    const modelBody = (await modelResponse.json()) as {
+      activeModelId: string | null;
+      selectionFallbackReason: string | null;
+      models: Array<{ id: string; availabilityStatus: string; selectable: boolean; routingStatus: string }>;
+    };
+    const geminiModel = modelBody.models.find((candidate) => candidate.id === "gemini:gemini-3.1-pro-preview");
+
+    expect(modelBody.activeModelId).toBe("gemini:gemini-3.1-pro-preview");
+    expect(modelBody.selectionFallbackReason).toBeNull();
+    expect(geminiModel).toMatchObject({
+      availabilityStatus: "selectable",
+      selectable: true,
+      routingStatus: "implemented"
+    });
+    await expect(
+      readProviderKeyStatus({
+        env,
+        database: env.AARONDB as D1Database,
+        provider: "gemini"
+      })
+    ).resolves.toMatchObject({
+      configured: true,
+      source: "protected-store",
+      maskedKey: "••••••••1234"
+    });
+  });
+
+  it("refuses to store an invalid Gemini key and keeps the provider unconfigured", async () => {
+    const { env } = createEnv({ appAuthToken: "letmein" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: "API key not valid. Please pass a valid API key." } }), {
+        status: 403,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "bad-key-0000" })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      error: string;
+      provider: { configured: boolean; validation: { status: string; detail: string | null } };
+    };
+
+    expect(response.status).toBe(400);
+    expect(body.error).toContain("not stored");
+    expect(body.provider).toMatchObject({
+      configured: false,
+      validation: {
+        status: "invalid",
+        detail: expect.stringContaining("API key not valid")
+      }
+    });
+    await expect(
+      readProviderKeyStatus({
+        env,
+        database: env.AARONDB as D1Database,
+        provider: "gemini"
+      })
+    ).resolves.toMatchObject({ configured: false, source: "none" });
+  });
+
+  it("revalidates the current configured Gemini key without resubmitting the raw secret", async () => {
+    const { env } = createEnv({ appAuthToken: "letmein" });
+    const geminiFetch = vi.spyOn(globalThis, "fetch");
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-5678" })
+      }),
+      env as Env
+    );
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", action: "validate" })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      provider: { configured: boolean; validation: { status: string; detail: string | null } };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.provider).toMatchObject({
+      configured: true,
+      validation: {
+        status: "valid",
+        detail: expect.stringContaining("first visible model")
+      }
+    });
+    expect(geminiFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("persists an operator model selection through the model route", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelId: "workers-ai:@cf/meta/test-model" })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      persistedModelId: string | null;
+      activeModelId: string | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.persistedModelId).toBe("workers-ai:@cf/meta/test-model");
+    expect(body.activeModelId).toBe("workers-ai:@cf/meta/test-model");
+    await expect(readPersistedModelSelection(env.AARONDB as D1Database)).resolves.toBe(
+      "workers-ai:@cf/meta/test-model"
+    );
+  });
+
+  it("refuses to select Gemini until its key state has been validated", async () => {
+    const { env } = createEnv({
+      aiMode: "success",
+      appAuthToken: "letmein",
+      geminiApiKey: "gemini-test-key"
+    });
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelId: "gemini:gemini-3.1-pro-flash-preview" })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      error: string;
+      model: { selectable: boolean; availabilityStatus: string };
+    };
+
+    expect(response.status).toBe(409);
+    expect(body.error).toContain("not currently selectable");
+    expect(body.model).toMatchObject({
+      selectable: false,
+      availabilityStatus: "configured-but-unavailable"
+    });
+  });
+
+  it("allows selecting Gemini after a validated key is stored through the protected route", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-1234" })
+      }),
+      env as Env
+    );
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelId: "gemini:gemini-3.1-pro-flash-preview" })
+      }),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      persistedModelId: string | null;
+      activeModelId: string | null;
+      selectionFallbackReason: string | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.persistedModelId).toBe("gemini:gemini-3.1-pro-preview");
+    expect(body.activeModelId).toBe("gemini:gemini-3.1-pro-preview");
+    expect(body.selectionFallbackReason).toBeNull();
+  });
+
+  it("falls back to Workers AI when the default Gemini selection is unavailable", async () => {
+    const { env } = createEnv({ aiMode: "success" });
+    await setPersistedModelSelection(env.AARONDB as D1Database, "gemini:gemini-3.1-pro-flash-preview");
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", { method: "POST" }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: "Use the currently selected model if possible." })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      assistant: { model: string | null; source: string };
+      session: {
+        messages: Array<{
+          metadata: Record<string, unknown> | null;
+        }>;
+      };
+    };
+
+    expect(chatted.status).toBe(201);
+    expect(chattedBody.assistant.source).toBe("workers-ai");
+    expect(chattedBody.assistant.model).toBe("@cf/meta/test-model");
+    expect((env.AI as FakeAiBinding).getLastRun()?.model).toBe("@cf/meta/test-model");
+    expect(chattedBody.session.messages[1]?.metadata).toMatchObject({
+      requestedModelId: "gemini:gemini-3.1-pro-preview",
+      activeModelId: "workers-ai:@cf/meta/test-model",
+      modelSelectionFallbackReason: "requested-model-unavailable"
+    });
+  });
+
+  it("routes chat through Gemini after a validated Gemini key is selected", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+    const geminiFetch = vi.spyOn(globalThis, "fetch");
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+    geminiFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "Gemini reply: external provider route is active." }]
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json; charset=UTF-8" }
+        }
+      )
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-5678" })
+      }),
+      env as Env
+    );
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelId: "gemini:gemini-3.1-pro-flash-preview" })
+      }),
+      env as Env
+    );
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ content: "Use the validated Gemini route." })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      assistant: { content: string; source: string; model: string | null; fallbackReason: string | null };
+      session: { messages: Array<{ metadata: Record<string, unknown> | null }> };
+    };
+
+    expect(chatted.status).toBe(201);
+    expect(chattedBody.assistant).toMatchObject({
+      source: "gemini",
+      model: "gemini-3.1-pro-preview",
+      fallbackReason: null
+    });
+    expect(chattedBody.assistant.content).toContain("Gemini reply");
+    expect((env.AI as FakeAiBinding).getLastRun()).toBeNull();
+    expect(String(geminiFetch.mock.calls[1]?.[0] ?? "")).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
+    );
+    expect(new Headers(geminiFetch.mock.calls[1]?.[1]?.headers).get("x-goog-api-key")).toBe(
+      "gemini-secret-5678"
+    );
+    expect(chattedBody.session.messages[1]?.metadata).toMatchObject({
+      source: "gemini",
+      model: "gemini-3.1-pro-preview",
+      activeModelId: "gemini:gemini-3.1-pro-preview"
+    });
+  });
+
+  it("falls back to Workers AI when the selected Gemini route fails", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+    const geminiFetch = vi.spyOn(globalThis, "fetch");
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { message: "Gemini upstream unavailable" } }), {
+        status: 503,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-9012" })
+      }),
+      env as Env
+    );
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ content: "Gemini first, Workers AI fallback." })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      assistant: {
+        content: string;
+        source: string;
+        model: string | null;
+        fallbackReason: string | null;
+        fallbackDetail: string | null;
+      };
+      session: { messages: Array<{ metadata: Record<string, unknown> | null }> };
+    };
+
+    expect(chatted.status).toBe(201);
+    expect(chattedBody.assistant.source).toBe("workers-ai");
+    expect(chattedBody.assistant.model).toBe("@cf/meta/test-model");
+    expect(chattedBody.assistant.fallbackReason).toBe("provider-error");
+    expect(chattedBody.assistant.fallbackDetail).toContain("Google Gemini request failed with status 503");
+    expect(chattedBody.assistant.fallbackDetail).toContain("Fell back to Workers AI (@cf/meta/test-model)");
+    expect((env.AI as FakeAiBinding).getLastRun()?.model).toBe("@cf/meta/test-model");
+    expect(chattedBody.session.messages[1]?.metadata).toMatchObject({
+      source: "workers-ai",
+      fallbackReason: "provider-error",
+      fallbackDetail: expect.stringContaining("Google Gemini request failed with status 503")
+    });
+  });
+
+  it("falls back to Gemini when Workers AI fails and a validated Gemini route is available", async () => {
+    const { env } = createEnv({ aiMode: "throw", appAuthToken: "letmein" });
+    const geminiFetch = vi.spyOn(globalThis, "fetch");
+    geminiFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+    geminiFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "Gemini recovered this request after Workers AI failed." }]
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json; charset=UTF-8" }
+        }
+      )
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-3456" })
+      }),
+      env as Env
+    );
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/model", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ modelId: "workers-ai:@cf/meta/test-model" })
+      }),
+      env as Env
+    );
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ content: "Recover this via Gemini if Workers AI fails." })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      assistant: {
+        content: string;
+        source: string;
+        model: string | null;
+        fallbackReason: string | null;
+        fallbackDetail: string | null;
+      };
+      session: { messages: Array<{ metadata: Record<string, unknown> | null }> };
+    };
+
+    expect(chatted.status).toBe(201);
+    expect(chattedBody.assistant.source).toBe("gemini");
+    expect(chattedBody.assistant.model).toBe("gemini-3.1-pro-preview");
+    expect(chattedBody.assistant.fallbackReason).toBe("ai-error");
+    expect(chattedBody.assistant.fallbackDetail).toContain("Workers AI request failed with Error: Workers AI unavailable");
+    expect(chattedBody.assistant.fallbackDetail).toContain("Fell back to Google Gemini (gemini-3.1-pro-preview)");
+    expect(chattedBody.assistant.content).toContain("Gemini recovered this request");
+    expect(chattedBody.session.messages[1]?.metadata).toMatchObject({
+      source: "gemini",
+      fallbackReason: "ai-error",
+      fallbackDetail: expect.stringContaining("Workers AI request failed with Error: Workers AI unavailable")
+    });
+  });
+
   it("requires a bearer token when APP_AUTH_TOKEN is configured", async () => {
     const { env } = createEnv({ appAuthToken: "letmein" });
 
@@ -887,16 +1572,65 @@ describe("worker session routes", () => {
       authMode: string;
       authBoundary: string;
       assistantRuntime: string;
+      defaultModel: string | null;
+      activeAssistantRuntime: string;
+      activeModel: string | null;
       assistantBindingStatus: string;
       assistantFallbackBehavior: string;
+      selectionFallbackReason: string | null;
     };
 
     expect(response.status).toBe(200);
     expect(body.authMode).toBe("bearer-token");
     expect(body.authBoundary).toContain("Landing page stays public");
-    expect(body.assistantRuntime).toBe("workers-ai");
+    expect(body.assistantRuntime).toBe("gemini");
+    expect(body.defaultModel).toBe("gemini-3.1-pro-preview");
+    expect(body.activeAssistantRuntime).toBe("workers-ai");
+    expect(body.activeModel).toBe("@cf/meta/test-model");
     expect(body.assistantBindingStatus).toBe("configured");
-    expect(body.assistantFallbackBehavior).toContain("logs the reason");
+    expect(body.assistantFallbackBehavior).toContain("Gemini remains the default operator-facing model path");
+    expect(body.selectionFallbackReason).toBe("requested-model-unavailable");
+  });
+
+  it("reports Gemini as the active default model path on health after key validation", async () => {
+    const { env } = createEnv({ appAuthToken: "letmein", aiMode: "success" });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ models: [{ name: "models/gemini-3.1-pro-preview" }] }), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=UTF-8" }
+      })
+    );
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/key", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ provider: "gemini", apiKey: "gemini-secret-7890" })
+      }),
+      env as Env
+    );
+
+    const response = await worker.fetch(
+      new Request("https://aaronclaw.test/health"),
+      env as Env
+    );
+    const body = (await response.json()) as {
+      assistantRuntime: string;
+      defaultModel: string | null;
+      activeAssistantRuntime: string;
+      activeModel: string | null;
+      selectionFallbackReason: string | null;
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.assistantRuntime).toBe("gemini");
+    expect(body.defaultModel).toBe("gemini-3.1-pro-preview");
+    expect(body.activeAssistantRuntime).toBe("gemini");
+    expect(body.activeModel).toBe("gemini-3.1-pro-preview");
+    expect(body.selectionFallbackReason).toBeNull();
   });
 
   it("runs scheduled maintenance and persists a morning briefing session", async () => {
@@ -907,6 +1641,15 @@ describe("worker session routes", () => {
       "history-4",
       "Morning maintenance should review recent reasoning evidence for AaronDB sessions."
     );
+    const activationResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance/activate", {
+        method: "POST"
+      }),
+      env as Env
+    );
+
+    expect(activationResponse.status).toBe(200);
+
     await worker.scheduled?.(
       {
         cron: "0 8 * * *",
@@ -922,11 +1665,379 @@ describe("worker session routes", () => {
       "maintenance:briefing:2026-03-09"
     );
     const briefingSession = await maintenanceRepository.getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance"),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          cron: string;
+          maintenanceSessionId: string | null;
+          status: string;
+        } | null;
+        recentAudit: Array<{
+          toolName: string;
+          capability: string | null;
+          outcome: string | null;
+        }>;
+      };
+    };
 
     expect(briefingSession?.toolEvents[0]).toMatchObject({
       toolName: "morning-briefing"
     });
     expect(briefingSession?.toolEvents[0]?.summary).toContain("Morning briefing");
+    expect(briefingSession?.toolEvents[0]?.metadata).toMatchObject({
+      audit: {
+        toolId: "morning-briefing",
+        policy: "scheduled-safe",
+        capability: "maintenance.run.briefing",
+        outcome: "succeeded"
+      }
+    });
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      cron: "0 8 * * *",
+      maintenanceSessionId: "maintenance:briefing:2026-03-09",
+      status: "succeeded"
+    });
+    expect(handBody.hand.recentAudit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          toolName: "hand-run",
+          capability: "hand.execute.scheduled",
+          outcome: "succeeded"
+        }),
+        expect.objectContaining({
+          toolName: "hand-lifecycle",
+          capability: "operator.control.hands",
+          outcome: "succeeded"
+        })
+      ])
+    );
+
+    const handRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:scheduled-maintenance"
+    );
+    const handSession = await handRepository.getSession();
+
+    expect(handSession?.toolEvents[0]?.metadata).toMatchObject({
+      audit: {
+        toolId: "hand-lifecycle",
+        policy: "operator-protected",
+        capability: "operator.control.hands",
+        outcome: "succeeded"
+      }
+    });
+    expect(handSession?.toolEvents[1]?.metadata).toMatchObject({
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
+    });
+  });
+
+  it("lists, activates, and pauses the bundled hands runtime without affecting chat routes", async () => {
+    const { env } = createEnv({ appAuthToken: "letmein" });
+
+    const listResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const listBody = (await listResponse.json()) as {
+      hands: Array<{ id: string; status: string; persisted: boolean }>;
+    };
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const activatedBody = (await activatedResponse.json()) as {
+      hand: {
+        id: string;
+        status: string;
+        persisted: boolean;
+        recentRuns: unknown[];
+        recentAudit: Array<{ toolName: string; policy: string | null; capability: string | null }>;
+      };
+    };
+
+    const pausedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance/pause", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const pausedBody = (await pausedResponse.json()) as {
+      hand: { id: string; status: string; persisted: boolean };
+    };
+
+    expect(listResponse.status).toBe(200);
+    expect(listBody.hands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "scheduled-maintenance",
+          status: "paused",
+          persisted: false
+        })
+      ])
+    );
+    expect(activatedResponse.status).toBe(200);
+    expect(activatedBody.hand).toMatchObject({
+      id: "scheduled-maintenance",
+      status: "active",
+      persisted: true
+    });
+    expect(activatedBody.hand.recentRuns).toEqual([]);
+    expect(activatedBody.hand.recentAudit[0]).toMatchObject({
+      toolName: "hand-lifecycle",
+      policy: "operator-protected",
+      capability: "operator.control.hands"
+    });
+    expect(pausedResponse.status).toBe(200);
+    expect(pausedBody.hand).toMatchObject({
+      id: "scheduled-maintenance",
+      status: "paused",
+      persisted: true
+    });
+  });
+
+  it("lists bundled manifest-driven skills and surfaces secret readiness", async () => {
+    const { env } = createEnv();
+
+    const listResponse = await worker.fetch(new Request("https://aaronclaw.test/api/skills"), env as Env);
+    const listBody = (await listResponse.json()) as {
+      skills: Array<{
+        id: string;
+        readiness: string;
+        memoryScope: string;
+        declaredTools: string[];
+        declaredToolDetails: Array<{ id: string; capability: string; policy: string }>;
+        requiredSecrets: Array<{ id: string; configured: boolean }>;
+      }>;
+    };
+
+    const detailResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/skills/gemini-review"),
+      env as Env
+    );
+    const detailBody = (await detailResponse.json()) as {
+      skill: {
+        id: string;
+        installScope: string;
+        runtime: string;
+        missingSecretIds: string[];
+      };
+    };
+
+    expect(listResponse.status).toBe(200);
+    expect(listBody.skills).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "aarondb-research",
+          readiness: "ready",
+          memoryScope: "session-and-knowledge-vault",
+          declaredTools: ["session-recall", "knowledge-vault"],
+          declaredToolDetails: [
+            expect.objectContaining({
+              id: "session-recall",
+              capability: "memory.read.session",
+              policy: "automatic-safe"
+            }),
+            expect.objectContaining({
+              id: "knowledge-vault",
+              capability: "memory.read.knowledge-vault",
+              policy: "automatic-safe"
+            })
+          ]
+        }),
+        expect.objectContaining({
+          id: "gemini-review",
+          readiness: "missing-secrets",
+          requiredSecrets: [expect.objectContaining({ id: "gemini-api-key", configured: false })]
+        })
+      ])
+    );
+    expect(detailResponse.status).toBe(200);
+    expect(detailBody.skill).toMatchObject({
+      id: "gemini-review",
+      installScope: "bundled-local-only",
+      runtime: "cloudflare-worker",
+      missingSecretIds: ["gemini-api-key"]
+    });
+  });
+
+  it("injects manifest-driven skill prompts and memory scope into the chat runtime", async () => {
+    const { env } = createEnv({ aiMode: "success", geminiApiKey: "gemini-secret-123" });
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", { method: "POST" }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "Review the active model path using the local skill manifest.",
+          skillId: "gemini-review"
+        })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      session: {
+        messages: Array<{
+          metadata: Record<string, unknown> | null;
+        }>;
+      };
+    };
+
+    const lastRun = (env.AI as FakeAiBinding).getLastRun();
+
+    expect(chatted.status).toBe(201);
+    expect(chattedBody.session.messages[0]?.metadata).toMatchObject({
+      skillId: "gemini-review",
+      skillMemoryScope: "session-only"
+    });
+    expect(chattedBody.session.messages[1]?.metadata).toMatchObject({
+      skillId: "gemini-review",
+      skillDeclaredTools: ["session-recall", "model-selection"],
+      skillDeclaredToolPolicies: expect.arrayContaining([
+        expect.objectContaining({
+          id: "session-recall",
+          capability: "memory.read.session",
+          policy: "automatic-safe"
+        }),
+        expect.objectContaining({
+          id: "model-selection",
+          capability: "assistant.route.select",
+          policy: "automatic-safe"
+        })
+      ]),
+      knowledgeVaultMatchCount: 0,
+      knowledgeVaultSource: "skill-disabled",
+      toolAuditTrail: expect.arrayContaining([
+        expect.objectContaining({
+          toolId: "session-recall",
+          capability: "memory.read.session",
+          policy: "automatic-safe",
+          outcome: "succeeded"
+        }),
+        expect.objectContaining({
+          toolId: "knowledge-vault",
+          capability: "memory.read.knowledge-vault",
+          policy: "automatic-safe",
+          outcome: "blocked"
+        }),
+        expect.objectContaining({
+          toolId: "model-selection",
+          capability: "assistant.route.select",
+          policy: "automatic-safe",
+          outcome: "succeeded"
+        })
+      ])
+    });
+    expect(lastRun?.input.messages.some((message) => message.content.includes("Manifest-driven skill runtime"))).toBe(
+      true
+    );
+    expect(lastRun?.input.messages.some((message) => message.content.includes("Memory scope: session recall only."))).toBe(
+      true
+    );
+  });
+
+  it("rejects a skill-gated chat request when required secrets are missing", async () => {
+    const { env } = createEnv({ aiMode: "success" });
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", { method: "POST" }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: "Try the Gemini review skill without a configured key.",
+          skillId: "gemini-review"
+        })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      error: string;
+      skill: { id: string; missingSecretIds: string[] };
+    };
+    const replayed = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}`),
+      env as Env
+    );
+    const replayedBody = (await replayed.json()) as {
+      session: { messages: unknown[] };
+    };
+
+    expect(chatted.status).toBe(409);
+    expect(chattedBody.error).toContain("missing required secrets");
+    expect(chattedBody.skill).toMatchObject({
+      id: "gemini-review",
+      missingSecretIds: ["gemini-api-key"]
+    });
+    expect(replayed.status).toBe(200);
+    expect(replayedBody.session.messages).toHaveLength(0);
+  });
+
+  it("keeps paused hands idle when cron fires", async () => {
+    const { env, database } = createEnv();
+
+    await seedHistoricalSession(
+      database,
+      "history-5",
+      "Paused hands should not run scheduled maintenance automatically."
+    );
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:30:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const maintenanceRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "maintenance:2026-03-09"
+    );
+    const maintenanceSession = await maintenanceRepository.getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance"),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: { status: string; latestRun: unknown | null };
+    };
+
+    expect(maintenanceSession).toBeNull();
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("paused");
+    expect(handBody.hand.latestRun).toBeNull();
   });
 
   it("serves HEAD for the root and health endpoints without falling through to 404", async () => {

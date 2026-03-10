@@ -1,7 +1,6 @@
 # Cloudflare deployment, auth, and operations
 
-This doc covers the real Cloudflare deploy path for AaronClaw, plus the current
-security posture and the smallest useful troubleshooting guide.
+This doc covers the real Cloudflare deploy path for AaronClaw, plus the currentsecurity posture and the smallest useful troubleshooting guide.
 
 ## Deployment model
 
@@ -10,9 +9,12 @@ AaronClaw deploys as one Worker with:
 - a Durable Object binding named `SESSION_RUNTIME`
 - a D1 binding named `AARONDB`
 - an optional Workers AI binding named `AI`
+- a Vectorize binding named `VECTOR_INDEX` for the knowledge-vault path
+- cron triggers for the bundled hands runtime (`*/30 * * * *` and `0 8 * * *`)
 
-The checked-in `wrangler.jsonc` stays local-first. Real deploys inject the remote
-D1 UUID into `.wrangler/deploy/wrangler.jsonc` through `npm run deploy:prep`.
+The checked-in `wrangler.jsonc` stays local-first. Real deploys inject the remoteD1 UUID into `.wrangler/deploy/wrangler.jsonc` through `npm run deploy:prep`.
+
+The current checked-in config expects the knowledge-vault index name`aaronclaw-knowledge-vault`. If Vectorize is unavailable, the session runtimedegrades to D1-compatible vault ranking instead of breaking chat, but the liveproduction posture now assumes the binding is present.
 
 ## Deploy sequence
 
@@ -22,8 +24,7 @@ D1 UUID into `.wrangler/deploy/wrangler.jsonc` through `npm run deploy:prep`.
 npm run validate:config
 ```
 
-This confirms the repo still has the expected Worker name, D1 binding, Durable
-Object binding, local preview database ID, and placeholder remote database ID.
+This confirms the repo still has the expected Worker name, D1 binding, DurableObject binding, local preview database ID, and placeholder remote database ID.
 
 ### 2. Create the remote D1 database
 
@@ -59,21 +60,34 @@ Protect the API with a bearer token:
 wrangler secret put APP_AUTH_TOKEN
 ```
 
-Workers AI is optional for first-run usability, but recommended for real
-assistant behavior. The checked-in config already expects the binding name `AI`
-and defaults the model to `@cf/meta/llama-3.1-8b-instruct`.
+Workers AI is still useful for first-run usability and as the explicit safefallback path. The checked-in config expects the binding name `AI`, and itsconfigured `AI_MODEL` remains the Workers AI fallback model rather than theoperator-facing default.
+
+## Provider-key management notes
+
+External-provider `/api/key` management now uses the existing admin bearer tokenboundary plus D1-backed encrypted storage.
+
+Operational requirements:
+
+- set `APP_AUTH_TOKEN` before using `/api/key`
+- use `/api/key` for Gemini key set/update + validation in the protected appsurface
+- raw provider keys are never returned by the Worker; responses are masked-only
+- Worker-secret fallback still works if `GEMINI_API_KEY` is injected directly atdeploy time, but `/api/key` stores the operator-managed copy in D1 so laterrouting can read it without requiring a new config file shape
+
+Current storage compromise:
+
+- the encrypted D1 provider-key store derives its AES-GCM key from`APP_AUTH_TOKEN`
+- if you rotate `APP_AUTH_TOKEN`, re-enter the provider key through `/api/key`afterward so the Worker can decrypt it again
+
+You do **not** need a new Wrangler binding for this task. The protected routereuses the existing D1 fact log and admin token secret.
 
 ## Telegram deployment notes
 
-Telegram support uses Worker secrets, not checked-in config, for both the bot
-token and the webhook secret header.
+Telegram support uses Worker secrets, not checked-in config, for both the bottoken and the webhook secret header.
 
 Important sequencing for this repo:
 
-- do **not** request or set the Telegram bot token during implementation-only
-  work
-- request the rotated Telegram bot token from the user only when live Telegram
-  deployment starts
+- do **not** request or set the Telegram bot token during implementation-onlywork
+- request the rotated Telegram bot token from the user only when live Telegramdeployment starts
 - add the bot token and webhook secret through Cloudflare secrets at that time
 
 When that later deployment step begins, use:
@@ -83,12 +97,9 @@ wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
 
-The Worker expects Telegram webhooks at `POST /telegram/webhook` and validates
-`X-Telegram-Bot-Api-Secret-Token` when `TELEGRAM_WEBHOOK_SECRET` is present.
+The Worker expects Telegram webhooks at `POST /telegram/webhook` and validates`X-Telegram-Bot-Api-Secret-Token` when `TELEGRAM_WEBHOOK_SECRET` is present.
 
-This task does **not** include calling Telegram's live `setWebhook` API or
-running the final live webhook smoke test; keep that in the separate Telegram
-deployment-verification follow-up.
+This task does **not** include calling Telegram's live `setWebhook` API orrunning the final live webhook smoke test; keep that in the separate Telegramdeployment-verification follow-up.
 
 ### 5. Generate the deploy config
 
@@ -104,8 +115,7 @@ This writes `.wrangler/deploy/wrangler.jsonc` with the real remote D1 UUID.
 npm run deploy:dry-run
 ```
 
-This command uses the generated deploy config and is the safest way to catch bad
-binding or config assumptions before a real deploy.
+This command uses the generated deploy config and is the safest way to catch badbinding or config assumptions before a real deploy.
 
 ### 7. Deploy
 
@@ -115,16 +125,19 @@ npm run deploy
 
 ## Current live posture
 
-The current public deployment at `https://aaronclaw.moneyacad.workers.dev` is
-working, and `/health` reports:
+The current public deployment at `https://aaronclaw.moneyacad.workers.dev` isworking. As of the current rollout, `GET /health` reports:
 
-- `authMode: none`
-- `assistantRuntime: workers-ai`
-- `defaultModel: @cf/meta/llama-3.1-8b-instruct`
+- `authMode: bearer-token`
+- `assistantRuntime: gemini`
+- `defaultModel: gemini-3.1-pro-preview`
+- `activeAssistantRuntime: gemini`
+- `activeModel: gemini-3.1-pro-preview`
+- `skillRuntime: manifest-driven`
+- `toolPolicyRuntime: capability-gated`
+- `toolAuditHistory: structured-session-and-hand-history`
+- `VECTOR_INDEX` mapped; `CONFIG_KV` and `ARCHIVE` not mounted
 
-That is accurate for the current dogfood deployment, but it also means the API
-is public today. For anything you do not want exposed, set `APP_AUTH_TOKEN` or
-front the Worker with Cloudflare Access.
+That means the landing page and `/health` remain public, while `/api/*`(including `/api/model`, `/api/key`, `/api/skills`, and `/api/hands`) requirethe current bearer token. This is still a single-operator deployment posture;for stronger identity and policy enforcement, front it with Cloudflare Access.
 
 ## Auth and security posture
 
@@ -134,11 +147,9 @@ AaronClaw intentionally uses a minimal single-user auth model:
 - `GET /health` also stays public for status checks.
 - Only `/api/*` routes are protected when `APP_AUTH_TOKEN` is configured.
 - The browser UI stores the token in local browser storage for convenience.
-- Telegram ingress is separate from `/api/*` bearer auth; use
-  `TELEGRAM_WEBHOOK_SECRET` so Telegram can authenticate without `APP_AUTH_TOKEN`.
+- Telegram ingress is separate from `/api/*` bearer auth; use`TELEGRAM_WEBHOOK_SECRET` so Telegram can authenticate without `APP_AUTH_TOKEN`.
 
-This is acceptable for personal dogfooding, but not a replacement for stronger
-user identity, session management, or Cloudflare Access policies.
+This is acceptable for personal dogfooding, but not a replacement for strongeruser identity, session management, or Cloudflare Access policies.
 
 ## Post-deploy operational checks
 
@@ -152,7 +163,16 @@ curl -sS https://aaronclaw.moneyacad.workers.dev/health
 You should expect:
 
 - `HEAD /` → `200` with `content-type: text/html; charset=UTF-8`
-- `GET /health` → `200` JSON with auth/runtime metadata
+- `GET /health` → `200` JSON with bearer-auth, Gemini, hands/skills, and runtime-substrate metadata
+
+If `APP_AUTH_TOKEN` is configured, also check the protected operator surfaces:
+
+```sh
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/skills
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/hands
+```
+
+You should expect bundled skill readiness / declared tool policy data plus handlifecycle and recent audit history.
 
 Then run one end-to-end session check:
 
@@ -167,13 +187,15 @@ That exact flow is what the current live deployment was verified against.
 
 | Symptom | Likely cause | What to check |
 | --- | --- | --- |
-| `npm run validate:config` fails | `wrangler.jsonc` drifted from the expected binding names or local-first D1 shape | Restore `SESSION_RUNTIME`, `AARONDB`, `preview_database_id: aaronclaw-local`, and the placeholder `database_id` in the checked-in config |
-| `npm run deploy:prep` fails immediately | `AARONCLAW_D1_DATABASE_ID` is missing or malformed | Export a real D1 UUID before running the command |
-| `/api/*` returns `401` | `APP_AUTH_TOKEN` is configured | Send `Authorization: Bearer <APP_AUTH_TOKEN>` or paste the token into the landing page |
-| `/telegram/webhook` returns `503` | `TELEGRAM_BOT_TOKEN` is not configured in Worker secrets | Add the bot token later during the Telegram deployment task with `wrangler secret put TELEGRAM_BOT_TOKEN` |
-| `/telegram/webhook` returns `401` | `TELEGRAM_WEBHOOK_SECRET` is configured but Telegram is not sending the expected header | Re-check the webhook setup step and the `X-Telegram-Bot-Api-Secret-Token` value used during Telegram webhook registration |
-| Chat replies come back as fallback | Workers AI is not bound, or the model call failed | Check `/health` for `assistantRuntime` and fallback policy; verify the `AI` binding and `AI_MODEL` |
-| `GET /api/sessions/:id` returns `404 session not initialized` | The session ID was never created in D1 | Create a session first, or confirm you are using the correct environment and D1 database |
+| npm run validate:config fails | wrangler.jsonc drifted from the expected binding names or local-first D1 shape | Restore SESSION_RUNTIME, AARONDB, preview_database_id: aaronclaw-local, and the placeholder database_id in the checked-in config |
+| npm run deploy:prep fails immediately | AARONCLAW_D1_DATABASE_ID is missing or malformed | Export a real D1 UUID before running the command |
+| /api/* returns 401 | APP_AUTH_TOKEN is configured | Send Authorization: Bearer <APP_AUTH_TOKEN> or paste the token into the landing page |
+| /api/key returns 412 | APP_AUTH_TOKEN is not configured | Set APP_AUTH_TOKEN first; protected key storage derives encryption from that token |
+| /telegram/webhook returns 503 | TELEGRAM_BOT_TOKEN is not configured in Worker secrets | Add the bot token later during the Telegram deployment task with wrangler secret put TELEGRAM_BOT_TOKEN |
+| /telegram/webhook returns 401 | TELEGRAM_WEBHOOK_SECRET is configured but Telegram is not sending the expected header | Re-check the webhook setup step and the X-Telegram-Bot-Api-Secret-Token value used during Telegram webhook registration |
+| Chat replies come back as fallback | Gemini is unavailable and the fallback path also failed, or no runtime path is configured | Check /health for the default/active path plus fallback policy; verify /api/key, the Gemini validation state, and the AI binding / AI_MODEL fallback configuration |
+| POST /api/sessions/:id/chat returns 409 for a skill | The bundled skill is known but not ready yet | Inspect /api/skills and satisfy the missing required secret (for example, configure Gemini key material for gemini-review); validation status remains a separate provider-health signal in /api/key |
+| GET /api/sessions/:id returns 404 session not initialized | The session ID was never created in D1 | Create a session first, or confirm you are using the correct environment and D1 database |
 | Reloaded sessions appear empty after deploy | Remote migrations were not applied or the Worker is pointed at the wrong D1 database | Re-run remote migrations and confirm the deploy config injected the intended D1 UUID |
 
-For endpoint semantics and request behavior, see [`docs/runtime.md`](runtime.md).
+For endpoint semantics and request behavior, see `docs/runtime.md`.

@@ -8,8 +8,7 @@ This is the fastest path to a working local AaronClaw instance.
 - `npm` (the repo ships with `package-lock.json` and npm scripts).
 - A Cloudflare login only if you plan to deploy or use remote D1 resources.
 
-The repo does not pin a Node version with an `.nvmrc` or `engines` field, so use
-a recent Node release that works with Wrangler 4.
+The repo does not pin a Node version with an `.nvmrc` or `engines` field, so usea recent Node release that works with Wrangler 4.
 
 ## One-time install
 
@@ -50,22 +49,33 @@ The landing page is the main control surface.
 
 1. Open `/`.
 2. If a deployment token field is visible, paste `APP_AUTH_TOKEN` there.
-3. Click **Create session**.
-4. Send a prompt.
-5. Click **Reload state** or refresh the page and reload the same session.
-6. Visit `/health` to confirm the runtime mode.
+3. Click **Refresh operator data** to inspect the bundled hands and skills.
+4. Click **Create session**.
+5. Send a prompt.
+6. Click **Reload state** or refresh the page and reload the same session.
+7. Visit `/health` to confirm the runtime mode.
 
-The UI keeps the active session ID in the `?session=` query param, so once a
-session exists you can reload or revisit the page and load that session again.
+The UI keeps the active session ID in the `?session=` query param, so once asession exists you can reload or revisit the page and load that session again.
+
+The operator section can inspect hands and skills today and can activate/pausehands. It does **not** currently choose a skill for chat from the browser UI;skill selection is per-turn API input through `skillId` on the chat route.
 
 ## What to expect locally
 
-- If Workers AI is available, chat replies come from the configured model.
-- If Workers AI is not bound locally, or the model call fails, AaronClaw returns
-  a deterministic fallback reply and still persists the turn. That is expected
-  behavior for first-run smoke testing.
-- The UI remains usable either way because persistence and replay do not depend
-  on Workers AI.
+- The bundled `scheduled-maintenance` hand is visible in operator controls and
+  starts paused until an operator activates it.
+- `aarondb-research` is ready by default and can use session recall plus the
+  knowledge-vault path.
+- `gemini-review` stays unready until Gemini key material is configured; chat
+  requests that opt into that skill return `409` until then.
+- The protected `/api/key` operator flow validates Gemini keys on set or when
+  re-checking them, but skill readiness itself is based on whether the required
+  secret is present.
+- If Gemini key validation has succeeded, chat defaults to Gemini first.
+- If Gemini is unavailable, AaronClaw falls back to Workers AI when that binding
+  is available.
+- If neither runtime path is usable, AaronClaw returns a deterministic fallback
+  reply and still persists the turn. That is expected behavior for first-run
+  smoke testing.
 
 ## Useful confidence checks
 
@@ -74,5 +84,4 @@ npm run typecheck
 npm test
 ```
 
-If you are moving from local work to a real Cloudflare deployment, continue with
-[`docs/deployment.md`](deployment.md).
+If you are moving from local work to a real Cloudflare deployment, continue with`docs/deployment.md`.

@@ -31,6 +31,15 @@ export interface TelegramUpdate {
 }
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4096;
+const TELEGRAM_PREFERRED_SPLIT_DELIMITERS = ["\n\n", "\n", ". ", "? ", "! ", "; ", ": ", ", ", " "];
+
+type TelegramSendMessageResponse = {
+  description?: string;
+  ok?: boolean;
+  result?: {
+    message_id?: number;
+  };
+};
 
 export function isTelegramConfigured(env: Env): boolean {
   return typeof env.TELEGRAM_BOT_TOKEN === "string" && env.TELEGRAM_BOT_TOKEN.trim().length > 0;
@@ -93,22 +102,40 @@ export async function sendTelegramReply(input: {
     throw new Error("telegram bot token is not configured");
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  let replyToMessageId = input.replyToMessageId;
+
+  for (const chunk of splitTelegramReplyText(input.text)) {
+    const payload = await sendTelegramMessage({
+      token,
+      chatId: input.chatId,
+      replyToMessageId,
+      text: chunk
+    });
+
+    replyToMessageId = payload.result?.message_id ?? replyToMessageId;
+  }
+}
+
+async function sendTelegramMessage(input: {
+  token: string;
+  chatId: number;
+  replyToMessageId: number;
+  text: string;
+}): Promise<TelegramSendMessageResponse> {
+  const response = await fetch(`https://api.telegram.org/bot${input.token}/sendMessage`, {
     method: "POST",
     headers: {
       "content-type": "application/json; charset=UTF-8"
     },
     body: JSON.stringify({
       chat_id: input.chatId,
-      text: normalizeTelegramText(input.text),
+      text: input.text,
       reply_to_message_id: input.replyToMessageId,
       allow_sending_without_reply: true
     })
   });
 
-  const payload = (await response.json().catch(() => null)) as
-    | { description?: string; ok?: boolean }
-    | null;
+  const payload = (await response.json().catch(() => null)) as TelegramSendMessageResponse | null;
 
   if (!response.ok || payload?.ok === false) {
     throw new Error(
@@ -117,16 +144,41 @@ export async function sendTelegramReply(input: {
         : `telegram sendMessage failed with status ${response.status}`
     );
   }
+
+  return payload ?? {};
 }
 
-function normalizeTelegramText(value: string): string {
+function splitTelegramReplyText(value: string): string[] {
   const trimmed = value.trim();
 
   if (trimmed.length <= TELEGRAM_MAX_MESSAGE_LENGTH) {
-    return trimmed;
+    return [trimmed];
   }
 
-  return `${trimmed.slice(0, TELEGRAM_MAX_MESSAGE_LENGTH - 1)}…`;
+  const chunks: string[] = [];
+  let remaining = trimmed;
+
+  while (remaining.length > TELEGRAM_MAX_MESSAGE_LENGTH) {
+    const splitAt = findTelegramSplitIndex(remaining, TELEGRAM_MAX_MESSAGE_LENGTH);
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt);
+  }
+
+  chunks.push(remaining);
+
+  return chunks;
+}
+
+function findTelegramSplitIndex(value: string, maxLength: number): number {
+  for (const delimiter of TELEGRAM_PREFERRED_SPLIT_DELIMITERS) {
+    const boundary = value.lastIndexOf(delimiter, maxLength - delimiter.length);
+
+    if (boundary > 0) {
+      return boundary + delimiter.length;
+    }
+  }
+
+  return maxLength;
 }
 
 function parseTelegramMessage(value: unknown): TelegramMessage | null {

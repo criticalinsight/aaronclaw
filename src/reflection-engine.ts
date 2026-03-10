@@ -1,4 +1,5 @@
 import { AaronDbEdgeSessionRepository, type SessionRecord, type ToolEvent } from "./session-state";
+import { buildToolAuditRecord } from "./tool-policy";
 
 const ALL_FACTS_SQL = `
   SELECT session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation
@@ -9,6 +10,7 @@ const ALL_FACTS_SQL = `
 
 const REFLECTION_PREFIX = "reflection:";
 const MAINTENANCE_PREFIX = "maintenance:";
+const HAND_PREFIX = "hand:";
 const MAINTENANCE_CRON = "*/30 * * * *";
 const MORNING_BRIEFING_CRON = "0 8 * * *";
 const MAX_MAINTENANCE_SESSIONS = 5;
@@ -97,7 +99,21 @@ export async function reflectSession(input: {
       reflectionFor: input.sessionId,
       sourceLastTx: sourceSession.lastTx,
       toolEventCount: metrics.toolEventCount,
-      unresolvedPromptCount: metrics.unresolvedPromptCount
+      unresolvedPromptCount: metrics.unresolvedPromptCount,
+      audit: buildToolAuditRecord({
+        toolId: "session-reflection",
+        actor: "maintenance-runtime",
+        scope: "maintenance",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        detail: `Reflection captured source tx ${sourceSession.lastTx}.`,
+        extra: {
+          reflectionSessionId,
+          sourceLastTx: sourceSession.lastTx,
+          toolEventCount: metrics.toolEventCount
+        }
+      })
     }
   });
 
@@ -135,7 +151,21 @@ export async function runScheduledMaintenance(input: {
       cron: input.cron,
       reflectedSessionCount: reflections.filter((reflection) => reflection.persisted).length,
       reviewedSessionCount: reviewedSessionIds.length,
-      reviewedSessionIds
+      reviewedSessionIds,
+      audit: buildToolAuditRecord({
+        toolId: input.cron === MORNING_BRIEFING_CRON ? "morning-briefing" : "scheduled-maintenance",
+        actor: "maintenance-runtime",
+        scope: "maintenance",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: maintenanceSessionId,
+        detail: `Maintenance reviewed ${reviewedSessionIds.length} sessions for cron ${input.cron}.`,
+        extra: {
+          cron: input.cron,
+          reflectedSessionCount: reflections.filter((reflection) => reflection.persisted).length,
+          reviewedSessionCount: reviewedSessionIds.length
+        }
+      })
     }
   });
 
@@ -245,7 +275,11 @@ function buildMaintenanceSummary(cron: string, reflections: SessionReflectionRes
 }
 
 function isSyntheticSessionId(sessionId: string): boolean {
-  return sessionId.startsWith(REFLECTION_PREFIX) || sessionId.startsWith(MAINTENANCE_PREFIX);
+  return (
+    sessionId.startsWith(REFLECTION_PREFIX) ||
+    sessionId.startsWith(MAINTENANCE_PREFIX) ||
+    sessionId.startsWith(HAND_PREFIX)
+  );
 }
 
 function previewEvent(event: SessionRecord["events"][number]): string {
