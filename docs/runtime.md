@@ -27,7 +27,7 @@ The landing page includes:
 - a deployment token field (visible only when auth is enabled)
 - a session ID field
 - **Create session**, **Load session**, and **Reload state** actions
-- a protected **Operator controls** section for bundled hands and skills
+- a protected **Operator controls** section for bundled hands, skills, and improvement candidates
 - a message composer
 - a status panel that shows the current auth/runtime mode
 
@@ -36,7 +36,10 @@ Important browser behavior:
 - The UI stores `APP_AUTH_TOKEN` in browser local storage.
 - The active session ID is written to `?session=<id>` in the page URL.
 - Reloading the page does not create a new session automatically; it reloads thesession you already selected.
-- The operator section reuses the same token and lets an operator refresh handsand skills, activate/pause a hand, and inspect recent run/audit summaries.
+- The operator section reuses the same token and lets an operator refresh hands, skills, and improvement candidates, activate/pause a hand, and approve/reject/pause a candidate while inspecting evidence and lifecycle history.
+- When a hand records bounded findings (for example, `regression-watch`,
+  `provider-health-watchdog`, or `docs-drift`), the detailed hand payload also
+  carries the structured evidence for operator review.
 - The landing page does **not** currently expose a skill picker for chat turns.Skill selection is API-driven through `POST /api/sessions/:id/chat` with`skillId`.
 
 ## Session API
@@ -66,14 +69,34 @@ Important browser behavior:
 | POST | /api/model | Persists a selectable operator model ID. |
 | GET | /api/key | Lists provider-key status with masked-only output. Never returns raw secret material. |
 | POST | /api/key | Protected Gemini-first key set/validate flow. action: "set" validates before storing; action: "validate" re-checks the current configured key. |
+| GET | /api/improvements | Lists structured improvement candidates with evidence, status, and lifecycle history. |
+| GET | /api/improvements/:proposalKey | Returns one structured improvement candidate for detailed protected review. |
+| POST | /api/improvements/:proposalKey/approve | Protected improvement lifecycle action that marks a candidate approved after bounded review. |
+| POST | /api/improvements/:proposalKey/reject | Protected improvement lifecycle action that rejects a candidate. |
+| POST | /api/improvements/:proposalKey/pause | Protected improvement lifecycle action that places an awaiting-approval candidate on operator hold. |
 | GET | /api/hands | Lists bundled hands with lifecycle status, recent run summaries, and recent audit snippets. |
-| GET | /api/hands/:id | Returns one hand with detailed recent status/audit information for operator inspection. |
+| GET | /api/hands/:id | Returns one hand with detailed recent status/audit information plus bounded findings when the hand recorded reviewable evidence. |
 | POST | /api/hands/:id/activate | Protected hand lifecycle action. Persists operator audit metadata. |
 | POST | /api/hands/:id/pause | Protected hand lifecycle action. Persists operator audit metadata. |
 | GET | /api/skills | Lists bundled manifest-driven skills with readiness, declared tool policies, and secret state. |
 | GET | /api/skills/:id | Returns one bundled skill manifest with resolved readiness details. |
 
-`/api/hands` and `/api/skills` back the landing page's operator section. The UIcan inspect both surfaces today, but only hands expose browser actions; skillsremain inspectable manifests that are selected from the chat API.
+`/api/hands`, `/api/skills`, and `/api/improvements` back the landing page's operator section. The UI can inspect all three surfaces today; hands expose lifecycle controls, improvements expose bounded review controls, and skills remain inspectable manifests that are selected from the chat API.
+
+Current bundled hands/operators posture:
+
+- `scheduled-maintenance`
+- `improvement-hand`
+- `user-correction-miner`
+- `regression-watch`
+- `provider-health-watchdog`
+- `docs-drift`
+
+Current bundled skills posture:
+
+- `aarondb-research`
+- `gemini-review`
+- `incident-triage`
 
 ## Capability-gated tools and audit history
 

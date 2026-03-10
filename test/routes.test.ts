@@ -3,6 +3,7 @@ import {
   buildBootstrapStatus,
   extractSessionId,
   parseHandRoute,
+  parseImprovementRoute,
   parseSkillRoute,
   parseSessionRoute,
   renderLandingPage
@@ -80,13 +81,15 @@ describe("buildBootstrapStatus", () => {
     });
   });
 
-  it("renders the existing landing page with protected operator controls for hands and skills", () => {
+  it("renders the existing landing page with protected operator controls for hands, skills, and improvement candidates", () => {
     const html = renderLandingPage({ authRequired: true, defaultProvider: "gemini" });
 
     expect(html).toContain("Operator controls");
     expect(html).toContain("Refresh operator data");
     expect(html).toContain("/api/hands");
     expect(html).toContain("/api/skills");
+    expect(html).toContain("/api/improvements");
+    expect(html).toContain("Improvement candidates");
     expect(html).toContain("Recent audit");
   });
 });
@@ -129,6 +132,33 @@ describe("parseHandRoute", () => {
 
     expect(parseHandRoute("/api/hands/scheduled-maintenance/pause")).toEqual({
       handId: "scheduled-maintenance",
+      action: "pause"
+    });
+  });
+});
+
+describe("parseImprovementRoute", () => {
+  it("parses improvement candidate list, detail, and protected review routes", () => {
+    expect(parseImprovementRoute("/api/improvements")).toEqual({
+      proposalKey: null,
+      action: "list"
+    });
+
+    expect(
+      parseImprovementRoute(
+        "/api/improvements/reflection%3Ahistory-improvement%400%3Aadd-tool-backed-verification-step"
+      )
+    ).toEqual({
+      proposalKey: "reflection:history-improvement@0:add-tool-backed-verification-step",
+      action: "detail"
+    });
+
+    expect(
+      parseImprovementRoute(
+        "/api/improvements/reflection%3Ahistory-improvement%400%3Aadd-tool-backed-verification-step/pause"
+      )
+    ).toEqual({
+      proposalKey: "reflection:history-improvement@0:add-tool-backed-verification-step",
       action: "pause"
     });
   });

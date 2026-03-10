@@ -43,8 +43,8 @@ In the current codebase and live deployment (`/health`):
   `aarondb-research` (session recall + knowledge vault) and `gemini-review`
   (session-only review path that requires configured Gemini key material).
 - Skill selection for chat is API-driven per turn via `skillId`; the landing
-  page currently exposes hands/skills inspection and hand controls, not a skill
-  picker.
+  page currently exposes hands/skills inspection, protected hand controls, and
+  protected improvement-candidate review controls, not a skill picker.
 - `HEAD /` and `HEAD /health` are kept probe-safe.
 - Session create → chat → reload → recall remains the expected smoke path.
 
@@ -105,6 +105,9 @@ validation notes, and troubleshooting guidance.
   route.
 - `GET /api/key` and `POST /api/key` inspect or manage protected Gemini key
   state.
+- `GET /api/improvements`, `GET /api/improvements/:proposalKey`, and
+  `POST /api/improvements/:proposalKey/{approve|reject|pause}` expose the
+  protected self-improvement review surface with evidence and lifecycle status.
 - `GET /api/skills` and `GET /api/skills/:id` expose manifest-driven bundled
   skills with readiness and declared tool policies.
 - `GET /api/hands`, `GET /api/hands/:id`, `POST /api/hands/:id/activate`, and

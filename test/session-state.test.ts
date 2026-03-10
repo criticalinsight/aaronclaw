@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { defaultDocsContract, runScheduledDocsDriftReview } from "../src/docs-drift";
 import worker, { SessionRuntime } from "../src/index";
 import { queryKnowledgeVault } from "../src/knowledge-vault";
 import {
@@ -6,7 +7,14 @@ import {
   setPersistedModelSelection
 } from "../src/model-selection-store";
 import { readProviderKeyStatus } from "../src/provider-key-store";
-import { reflectSession } from "../src/reflection-engine";
+import {
+  IMPROVEMENT_PROPOSAL_SESSION_ID,
+  readImprovementProposalState,
+  recordImprovementLifecycleAction,
+  reflectSession,
+  runScheduledImprovementProposalReview,
+  runScheduledImprovementShadowEvaluation
+} from "../src/reflection-engine";
 import { AaronDbEdgeSessionRepository } from "../src/session-state";
 import { buildTelegramSessionId } from "../src/telegram";
 
@@ -348,6 +356,70 @@ async function seedHistoricalSession(database: FakeD1Database, sessionId: string
     toolName: "search",
     summary: `Historical recall note: ${content}`
   });
+}
+
+async function seedCorrectionSession(
+  database: FakeD1Database,
+  input: {
+    sessionId: string;
+    prompt: string;
+    assistant: string;
+    correction: string;
+  }
+) {
+  const repository = new AaronDbEdgeSessionRepository(
+    database as unknown as D1Database,
+    input.sessionId
+  );
+  await repository.createSession("2026-03-09T00:00:00.000Z");
+  await repository.appendMessage({
+    timestamp: "2026-03-09T00:00:01.000Z",
+    role: "user",
+    content: input.prompt
+  });
+  await repository.appendMessage({
+    timestamp: "2026-03-09T00:00:02.000Z",
+    role: "assistant",
+    content: input.assistant
+  });
+  await repository.appendMessage({
+    timestamp: "2026-03-09T00:00:03.000Z",
+    role: "user",
+    content: input.correction
+  });
+}
+
+async function seedFallbackReflectionSession(
+  database: FakeD1Database,
+  env: Parameters<typeof reflectSession>[0]["env"],
+  sessionId: string,
+  fallbackReason: string,
+  blockedToolId: string
+) {
+  const repository = new AaronDbEdgeSessionRepository(database as unknown as D1Database, sessionId);
+  await repository.createSession("2026-03-09T00:00:00.000Z");
+  await repository.appendMessage({
+    timestamp: "2026-03-09T00:00:01.000Z",
+    role: "user",
+    content: "Why did the assistant take the degraded path?"
+  });
+  const session = await repository.appendMessage({
+    timestamp: "2026-03-09T00:00:02.000Z",
+    role: "assistant",
+    content: "I had to fall back after a tool was blocked.",
+    metadata: {
+      fallbackReason,
+      toolAuditTrail: [
+        {
+          toolId: blockedToolId,
+          outcome: "blocked",
+          detail: `${blockedToolId} was blocked while the assistant was gathering evidence.`
+        }
+      ]
+    }
+  });
+
+  await reflectSession({ env, sessionId, session, timestamp: "2026-03-09T00:00:03.000Z" });
 }
 
 function cosineSimilarity(left: number[], right: number[]) {
@@ -1816,6 +1888,26 @@ describe("worker session routes", () => {
           id: "improvement-hand",
           status: "paused",
           persisted: false
+        }),
+        expect.objectContaining({
+          id: "user-correction-miner",
+          status: "paused",
+          persisted: false
+        }),
+        expect.objectContaining({
+          id: "regression-watch",
+          status: "paused",
+          persisted: false
+        }),
+        expect.objectContaining({
+          id: "provider-health-watchdog",
+          status: "paused",
+          persisted: false
+        }),
+        expect.objectContaining({
+          id: "docs-drift",
+          status: "paused",
+          persisted: false
         })
       ])
     );
@@ -1888,6 +1980,8 @@ describe("worker session routes", () => {
           proposalSessionId: string | null;
           reviewedSignalCount: number;
           generatedProposalCount: number;
+	          evaluatedProposalCount: number;
+	          awaitingApprovalCount: number;
           skippedDuplicateProposalCount: number;
         } | null;
       };
@@ -1900,9 +1994,11 @@ describe("worker session routes", () => {
       proposalSessionId: "improvement:proposals",
       reviewedSignalCount: 1,
       generatedProposalCount: 1,
+	      evaluatedProposalCount: 1,
+	      awaitingApprovalCount: 1,
       skippedDuplicateProposalCount: 0
     });
-    expect(proposalSession?.toolEvents).toHaveLength(1);
+	    expect(proposalSession?.toolEvents).toHaveLength(2);
     expect(proposalSession?.toolEvents[0]?.metadata).toMatchObject({
       audit: {
         toolId: "improvement-proposal-review",
@@ -1931,6 +2027,41 @@ describe("worker session routes", () => {
         })
       ]
     });
+	    expect(proposalSession?.toolEvents[1]?.metadata).toMatchObject({
+	      audit: {
+	        toolId: "improvement-shadow-evaluation",
+	        capability: "improvement.evaluate.shadow",
+	        policy: "scheduled-safe",
+	        outcome: "succeeded"
+	      },
+	      evaluatedProposalCount: 1,
+	      awaitingApprovalCount: 1,
+	      evaluationMode: "bounded-metadata-shadow",
+	      proposals: [
+	        expect.objectContaining({
+	          proposalKey: "reflection:history-improvement@3:promote-evidence-backed-pattern",
+	          status: "awaiting-approval",
+	          shadowEvaluation: expect.objectContaining({
+	            status: "completed",
+	            verdict: "awaiting-approval"
+	          }),
+	          approval: expect.objectContaining({
+	            requiresProtectedApproval: true,
+	            status: "pending"
+	          }),
+	          promotion: expect.objectContaining({
+	            status: "not-promoted",
+	            productionMutation: "manual-only",
+	            liveMutationApplied: false
+	          }),
+	          lifecycleHistory: expect.arrayContaining([
+	            expect.objectContaining({ action: "propose", toStatus: "proposed" }),
+	            expect.objectContaining({ action: "start-shadow", toStatus: "shadowing" }),
+	            expect.objectContaining({ action: "complete-shadow", toStatus: "awaiting-approval" })
+	          ])
+	        })
+	      ]
+	    });
 
     await worker.scheduled?.(
       {
@@ -1949,11 +2080,857 @@ describe("worker session routes", () => {
     );
     const improvementHandSession = await improvementHandRepository.getSession();
 
-    expect(proposalSessionAfterReplay?.toolEvents).toHaveLength(1);
+	    expect(proposalSessionAfterReplay?.toolEvents).toHaveLength(2);
     expect(improvementHandSession?.toolEvents[2]?.metadata).toMatchObject({
+	      awaitingApprovalCount: 0,
+	      evaluatedProposalCount: 0,
       generatedProposalCount: 0,
       reviewedSignalCount: 1,
       skippedDuplicateProposalCount: 1,
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
+    });
+  });
+
+  it("lists, inspects, pauses, approves, and rejects improvement candidates through protected routes", async () => {
+    const { env, database } = createEnv({ appAuthToken: "letmein" });
+
+    await seedHistoricalSession(
+      database,
+      "history-improvement-routes",
+      "Please verify with evidence why the route keeps falling back before you answer."
+    );
+    await reflectSession({ env, sessionId: "history-improvement-routes", timestamp: "2026-03-09T07:55:00.000Z" });
+
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/improvement-hand/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const listResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/improvements", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const listBody = (await listResponse.json()) as {
+      proposals: Array<{
+        proposalKey: string;
+        status: string;
+        evidence: Array<{ summary: string }>;
+        lifecycleHistory: Array<{ action: string; toStatus: string }>;
+      }>;
+    };
+    const proposalKey = listBody.proposals[0]?.proposalKey;
+
+    expect(listResponse.status).toBe(200);
+    expect(listBody.proposals[0]?.status).toBe("awaiting-approval");
+    expect(listBody.proposals[0]?.evidence).toEqual(
+      expect.arrayContaining([expect.objectContaining({ summary: expect.any(String) })])
+    );
+    expect(listBody.proposals[0]?.lifecycleHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "complete-shadow", toStatus: "awaiting-approval" })
+      ])
+    );
+    expect(proposalKey).toBeTruthy();
+
+    const detailResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/improvements/${encodeURIComponent(proposalKey!)}`, {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const detailBody = (await detailResponse.json()) as {
+      proposal: {
+        proposalKey: string;
+        status: string;
+        approval: { status: string };
+      };
+    };
+
+    expect(detailResponse.status).toBe(200);
+    expect(detailBody.proposal).toMatchObject({
+      proposalKey,
+      status: "awaiting-approval",
+      approval: { status: "pending" }
+    });
+
+    const pausedResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/improvements/${encodeURIComponent(proposalKey!)}/pause`, {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const pausedBody = (await pausedResponse.json()) as { proposal: { status: string } };
+    expect(pausedResponse.status).toBe(200);
+    expect(pausedBody.proposal.status).toBe("paused");
+
+    const approvedResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/improvements/${encodeURIComponent(proposalKey!)}/approve`, {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const approvedBody = (await approvedResponse.json()) as { proposal: { status: string } };
+    expect(approvedResponse.status).toBe(200);
+    expect(approvedBody.proposal.status).toBe("approved");
+
+    const rejectedResponse = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/improvements/${encodeURIComponent(proposalKey!)}/reject`, {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const rejectedBody = (await rejectedResponse.json()) as {
+      proposal: {
+        status: string;
+        lifecycleHistory: Array<{ action: string; toStatus: string }>;
+      };
+    };
+
+    expect(rejectedResponse.status).toBe(200);
+    expect(rejectedBody.proposal).toMatchObject({
+      status: "rejected",
+      lifecycleHistory: expect.arrayContaining([
+        expect.objectContaining({ action: "pause", toStatus: "paused" }),
+        expect.objectContaining({ action: "approve", toStatus: "approved" }),
+        expect.objectContaining({ action: "reject", toStatus: "rejected" })
+      ])
+    });
+  });
+
+  it("records shadow evaluation plus pause, approval, promotion, rejection, and rollback markers for stored proposals", async () => {
+    const { env, database } = createEnv();
+
+    await seedFallbackReflectionSession(database, env, "history-shadow-lifecycle", "ai-error", "knowledge-vault");
+
+    const proposalReview = await runScheduledImprovementProposalReview({
+      env,
+      cron: "*/30 * * * *",
+      timestamp: "2026-03-09T09:00:00.000Z"
+    });
+    const shadowEvaluation = await runScheduledImprovementShadowEvaluation({
+      env,
+      cron: "*/30 * * * *",
+      timestamp: "2026-03-09T09:00:01.000Z"
+    });
+    const initialState = await readImprovementProposalState({ env });
+
+    expect(proposalReview.generatedProposalCount).toBeGreaterThanOrEqual(2);
+    expect(shadowEvaluation.evaluatedProposalCount).toBe(proposalReview.generatedProposalCount);
+    expect(shadowEvaluation.awaitingApprovalCount).toBe(proposalReview.generatedProposalCount);
+    expect(initialState.proposalSessionId).toBe(IMPROVEMENT_PROPOSAL_SESSION_ID);
+    expect(initialState.proposals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          candidateKey: "stabilize-degraded-tool-path",
+          status: "awaiting-approval"
+        }),
+        expect.objectContaining({
+          candidateKey: "track-and-reduce-fallback-frequency",
+          status: "awaiting-approval"
+        })
+      ])
+    );
+
+    const degradedProposal = initialState.proposals.find(
+      (proposal) => proposal.candidateKey === "stabilize-degraded-tool-path"
+    );
+    const fallbackProposal = initialState.proposals.find(
+      (proposal) => proposal.candidateKey === "track-and-reduce-fallback-frequency"
+    );
+
+    expect(degradedProposal).toBeDefined();
+    expect(fallbackProposal).toBeDefined();
+
+    await expect(
+      recordImprovementLifecycleAction({
+        env,
+        proposalKey: fallbackProposal!.proposalKey,
+        action: "promote",
+        timestamp: "2026-03-09T09:00:02.000Z"
+      })
+    ).rejects.toThrow("must be approved before promotion");
+
+    const pausedProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey: fallbackProposal!.proposalKey,
+      action: "pause",
+      timestamp: "2026-03-09T09:00:02.000Z"
+    });
+    const approvedProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey: fallbackProposal!.proposalKey,
+      action: "approve",
+      timestamp: "2026-03-09T09:00:03.000Z"
+    });
+    const promotedProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey: fallbackProposal!.proposalKey,
+      action: "promote",
+      timestamp: "2026-03-09T09:00:04.000Z"
+    });
+    const rolledBackProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey: fallbackProposal!.proposalKey,
+      action: "rollback",
+      timestamp: "2026-03-09T09:00:05.000Z"
+    });
+    const rejectedProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey: degradedProposal!.proposalKey,
+      action: "reject",
+      timestamp: "2026-03-09T09:00:06.000Z"
+    });
+    const finalState = await readImprovementProposalState({ env });
+    const proposalSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      IMPROVEMENT_PROPOSAL_SESSION_ID
+    ).getSession();
+
+    expect(pausedProposal.status).toBe("paused");
+    expect(approvedProposal.status).toBe("approved");
+    expect(promotedProposal).toMatchObject({
+      status: "promoted",
+      promotion: {
+        status: "promoted",
+        productionMutation: "manual-only",
+        liveMutationApplied: false
+      }
+    });
+    expect(rolledBackProposal.status).toBe("rolled-back");
+    expect(rejectedProposal.status).toBe("rejected");
+    expect(finalState.proposals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          proposalKey: fallbackProposal!.proposalKey,
+          status: "rolled-back",
+          lifecycleHistory: expect.arrayContaining([
+              expect.objectContaining({ action: "pause", toStatus: "paused" }),
+            expect.objectContaining({ action: "approve", toStatus: "approved" }),
+            expect.objectContaining({ action: "promote", toStatus: "promoted" }),
+            expect.objectContaining({ action: "rollback", toStatus: "rolled-back" })
+          ])
+        }),
+        expect.objectContaining({
+          proposalKey: degradedProposal!.proposalKey,
+          status: "rejected",
+          lifecycleHistory: expect.arrayContaining([
+            expect.objectContaining({ action: "reject", toStatus: "rejected" })
+          ])
+        })
+      ])
+    );
+    expect(proposalSession?.toolEvents).toHaveLength(7);
+    expect(proposalSession?.toolEvents[2]?.metadata).toMatchObject({
+      action: "pause",
+      audit: {
+        toolId: "improvement-candidate-review",
+        capability: "operator.control.improvements",
+        policy: "operator-protected",
+        outcome: "succeeded"
+      }
+    });
+    expect(proposalSession?.toolEvents[3]?.metadata).toMatchObject({
+      action: "approve",
+      audit: {
+        toolId: "improvement-candidate-review",
+        capability: "operator.control.improvements",
+        policy: "operator-protected",
+        outcome: "succeeded"
+      }
+    });
+    expect(proposalSession?.toolEvents[6]?.metadata).toMatchObject({
+      action: "reject",
+      proposals: [
+        expect.objectContaining({
+          proposalKey: degradedProposal!.proposalKey,
+          status: "rejected"
+        })
+      ]
+    });
+  });
+
+  it("runs the User Correction Miner and routes repeated correction signals into the review-only proposal store", async () => {
+    const { env, database } = createEnv({ appAuthToken: "letmein" });
+
+    await seedCorrectionSession(database, {
+      sessionId: "correction-1",
+      prompt: "Why did the route fail?",
+      assistant: "It probably failed because the upstream was slow.",
+      correction: "No, verify it with evidence and inspect the actual trace before you conclude."
+    });
+    await seedCorrectionSession(database, {
+      sessionId: "correction-2",
+      prompt: "What caused the fallback?",
+      assistant: "It fell back because the tool likely timed out.",
+      correction: "Please show evidence and inspect the actual trace before answering."
+    });
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/user-correction-miner/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    expect(activatedResponse.status).toBe(200);
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "improvement:proposals"
+    );
+    const proposalSession = await proposalRepository.getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/user-correction-miner", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          status: string;
+          proposalSessionId: string | null;
+          correctionSignalCount: number;
+          matchedCorrectionCount: number;
+          generatedProposalCount: number;
+          skippedDuplicateProposalCount: number;
+        } | null;
+      };
+    };
+
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      status: "succeeded",
+      proposalSessionId: "improvement:proposals",
+      correctionSignalCount: 1,
+      matchedCorrectionCount: 2,
+      generatedProposalCount: 1,
+      skippedDuplicateProposalCount: 0
+    });
+    expect(proposalSession?.toolEvents).toHaveLength(1);
+    expect(proposalSession?.toolEvents[0]?.metadata).toMatchObject({
+      sourceHandId: "user-correction-miner",
+      audit: {
+        toolId: "improvement-proposal-review",
+        capability: "improvement.propose.reflection",
+        policy: "scheduled-safe",
+        outcome: "succeeded",
+        handId: "user-correction-miner"
+      },
+      correctionSignalCount: 1,
+      matchedCorrectionCount: 2,
+      generatedProposalCount: 1,
+      proposals: [
+        expect.objectContaining({
+          candidateKey: "strengthen-evidence-contract-from-corrections",
+          proposalKey:
+            "user-correction-miner:evidence-contract:strengthen-evidence-contract-from-corrections",
+          sourceHandId: "user-correction-miner"
+        })
+      ],
+      correctionSignals: [
+        expect.objectContaining({
+          signalKey: "repeated-user-correction-evidence-contract",
+          repeatedCorrectionCount: 2,
+          evidence: expect.arrayContaining([
+            expect.objectContaining({ kind: "metric" }),
+            expect.objectContaining({
+              kind: "message",
+              excerpt: expect.stringContaining("verify it with evidence")
+            })
+          ])
+        })
+      ]
+    });
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:30:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalSessionAfterReplay = await proposalRepository.getSession();
+    const correctionMinerRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:user-correction-miner"
+    );
+    const correctionMinerSession = await correctionMinerRepository.getSession();
+
+    expect(proposalSessionAfterReplay?.toolEvents).toHaveLength(1);
+    expect(correctionMinerSession?.toolEvents[2]?.metadata).toMatchObject({
+      correctionSignalCount: 1,
+      matchedCorrectionCount: 2,
+      generatedProposalCount: 0,
+      skippedDuplicateProposalCount: 1,
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
+    });
+  });
+
+  it("runs the provider-health watchdog hand and persists structured operator-visible findings", async () => {
+    const { env } = createEnv({
+      aiMode: "success",
+      appAuthToken: "letmein",
+      telegramBotToken: "telegram-test-token",
+      telegramWebhookSecret: "telegram-secret"
+    });
+
+    await setPersistedModelSelection(env.AARONDB as D1Database, "gemini:gemini-3.1-pro-flash-preview");
+
+    const chatRepository = new AaronDbEdgeSessionRepository(env.AARONDB as D1Database, "session-watchdog-chat");
+    await chatRepository.createSession("2026-03-09T07:40:00.000Z");
+    await chatRepository.appendMessage({
+      timestamp: "2026-03-09T07:41:00.000Z",
+      role: "user",
+      content: "Why did the chat route fall back?"
+    });
+    const chatSession = await chatRepository.appendMessage({
+      timestamp: "2026-03-09T07:42:00.000Z",
+      role: "assistant",
+      content: "The runtime used fallback for this chat request.",
+      metadata: {
+        fallbackReason: "ai-error",
+        fallbackDetail: "Workers AI request failed in the recent chat path.",
+        source: "fallback"
+      }
+    });
+    await reflectSession({
+      env,
+      sessionId: "session-watchdog-chat",
+      session: chatSession,
+      timestamp: "2026-03-09T07:43:00.000Z"
+    });
+
+    const telegramSessionId = buildTelegramSessionId({
+      messageId: 77,
+      date: 1_741_552_900,
+      text: "telegram route check",
+      chat: { id: 88, type: "private", username: "telegram_watchdog" },
+      from: {
+        id: 99,
+        isBot: false,
+        username: "telegram_watchdog_user",
+        firstName: "Telegram",
+        lastName: "Watchdog"
+      }
+    });
+    const telegramRepository = new AaronDbEdgeSessionRepository(env.AARONDB as D1Database, telegramSessionId);
+    await telegramRepository.createSession("2026-03-09T07:44:00.000Z");
+    await telegramRepository.appendMessage({
+      timestamp: "2026-03-09T07:45:00.000Z",
+      role: "user",
+      content: "telegram route check",
+      metadata: { channel: "telegram" }
+    });
+    const telegramSession = await telegramRepository.appendMessage({
+      timestamp: "2026-03-09T07:46:00.000Z",
+      role: "assistant",
+      content: "Telegram degraded to fallback.",
+      metadata: {
+        channel: "telegram",
+        fallbackReason: "provider-error",
+        fallbackDetail: "Google Gemini request failed with status 503.",
+        source: "fallback"
+      }
+    });
+    await reflectSession({
+      env,
+      sessionId: telegramSessionId,
+      session: telegramSession,
+      timestamp: "2026-03-09T07:47:00.000Z"
+    });
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/provider-health-watchdog/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    expect(activatedResponse.status).toBe(200);
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const signalSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "improvement:provider-health-signals"
+    ).getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/provider-health-watchdog", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          status: string;
+          signalSessionId: string | null;
+          healthyCount: number;
+          degradedCount: number;
+          unavailableCount: number;
+          providerHealthFindings: Array<{ findingKey: string; surface: string; status: string }>;
+        } | null;
+      };
+    };
+
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      status: "succeeded",
+      signalSessionId: "improvement:provider-health-signals",
+      healthyCount: 0,
+      degradedCount: 3,
+      unavailableCount: 1
+    });
+    expect(handBody.hand.latestRun?.providerHealthFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          findingKey: "gemini-key-readiness",
+          surface: "provider-key",
+          status: "unavailable"
+        }),
+        expect.objectContaining({
+          findingKey: "assistant-model-selection",
+          surface: "model-selection",
+          status: "degraded"
+        }),
+        expect.objectContaining({
+          findingKey: "chat-route-fallback-watch",
+          surface: "chat-route",
+          status: "degraded"
+        }),
+        expect.objectContaining({
+          findingKey: "telegram-route-watch",
+          surface: "telegram-route",
+          status: "degraded"
+        })
+      ])
+    );
+    expect(signalSession?.toolEvents[0]?.metadata).toMatchObject({
+      degradedCount: 3,
+      unavailableCount: 1,
+      selectionFallbackReason: "requested-model-unavailable",
+      findings: expect.arrayContaining([
+        expect.objectContaining({ findingKey: "gemini-key-readiness" }),
+        expect.objectContaining({ findingKey: "assistant-model-selection" }),
+        expect.objectContaining({ findingKey: "chat-route-fallback-watch" }),
+        expect.objectContaining({ findingKey: "telegram-route-watch" })
+      ])
+    });
+
+    const watchdogHandSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:provider-health-watchdog"
+    ).getSession();
+    expect(watchdogHandSession?.toolEvents[1]?.metadata).toMatchObject({
+      degradedCount: 3,
+      unavailableCount: 1,
+      signalSessionId: "improvement:provider-health-signals",
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
+    });
+  });
+
+  it("generates bounded docs-drift findings when the docs contract lags shipped hands", async () => {
+    const { env } = createEnv();
+
+    const review = await runScheduledDocsDriftReview({
+      env,
+      cron: "*/30 * * * *",
+      contract: {
+        ...defaultDocsContract,
+        documentedHands: {
+          ...defaultDocsContract.documentedHands,
+          values: ["scheduled-maintenance", "improvement-hand"]
+        }
+      }
+    });
+
+    expect(review.reviewedDocumentCount).toBe(2);
+    expect(review.reviewedClaimCount).toBe(4);
+    expect(review.findingCount).toBe(1);
+    expect(review.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          findingKey: "docs-drift:bundled-hands",
+          kind: "hand-posture",
+          severity: "medium"
+        })
+      ])
+    );
+    expect(review.findings[0]?.summary).toContain("docs-drift");
+    expect(review.findings[0]?.summary).toContain("provider-health-watchdog");
+  });
+
+  it("runs the docs drift hand and persists reviewable finding metadata on the hand surface", async () => {
+    const { env } = createEnv({ appAuthToken: "letmein" });
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/docs-drift/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    expect(activatedResponse.status).toBe(200);
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/docs-drift", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          status: string;
+          reviewedDocumentCount: number;
+          reviewedClaimCount: number;
+          findingCount: number;
+          findings: Array<{ findingKey: string }>;
+        } | null;
+      };
+    };
+
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      status: "succeeded",
+      reviewedDocumentCount: 2,
+      reviewedClaimCount: 4,
+      findingCount: 0
+    });
+    expect(handBody.hand.latestRun?.findings).toEqual([]);
+
+    const docsDriftSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:docs-drift"
+    ).getSession();
+    expect(docsDriftSession?.toolEvents[1]?.metadata).toMatchObject({
+      findingCount: 0,
+      reviewedDocumentCount: 2,
+      reviewedClaimCount: 4,
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
+    });
+  });
+
+  it("runs Regression Watch against stored regression evidence and persists bounded findings for operator review", async () => {
+    const { env, database } = createEnv({ appAuthToken: "letmein" });
+
+    await seedFallbackReflectionSession(
+      database,
+      env,
+      "history-regression-1",
+      "ai-error",
+      "knowledge-vault"
+    );
+    await seedFallbackReflectionSession(
+      database,
+      env,
+      "history-regression-2",
+      "route-timeout",
+      "runtime-state"
+    );
+
+    const failedHandRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:improvement-hand"
+    );
+    await failedHandRepository.createSession("2026-03-09T07:54:00.000Z");
+    await failedHandRepository.appendToolEvent({
+      timestamp: "2026-03-09T07:54:30.000Z",
+      toolName: "hand-run",
+      summary: "Improvement Hand failed for cron */30 * * * *: provider timeout",
+      metadata: {
+        action: "run",
+        cron: "*/30 * * * *",
+        error: "provider timeout",
+        handId: "improvement-hand",
+        status: "failed"
+      }
+    });
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/regression-watch/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    expect(activatedResponse.status).toBe(200);
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "improvement:proposals"
+    );
+    const proposalSession = await proposalRepository.getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/regression-watch", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          status: string;
+          proposalSessionId: string | null;
+          reviewedSignalCount: number;
+          generatedProposalCount: number;
+          skippedDuplicateProposalCount: number;
+          findingCount: number;
+          findings: Array<{ findingKey: string; evidence: Array<{ kind: string }> }>;
+        } | null;
+      };
+    };
+
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      status: "succeeded",
+      proposalSessionId: "improvement:proposals",
+      reviewedSignalCount: 6,
+      generatedProposalCount: 3,
+      skippedDuplicateProposalCount: 0,
+      findingCount: 3
+    });
+    expect(handBody.hand.latestRun?.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ findingKey: "fallback-spike" }),
+        expect.objectContaining({ findingKey: "blocked-tool-spike" }),
+        expect.objectContaining({ findingKey: "failed-hand-run" })
+      ])
+    );
+    expect(handBody.hand.latestRun?.findings[0]?.evidence.length).toBeGreaterThan(0);
+    expect(proposalSession?.toolEvents).toHaveLength(1);
+    expect(proposalSession?.toolEvents[0]?.metadata).toMatchObject({
+      audit: {
+        toolId: "regression-watch-review",
+        capability: "improvement.detect.regressions",
+        policy: "scheduled-safe",
+        outcome: "succeeded"
+      },
+      generatedProposalCount: 3,
+      reviewedSignalCount: 6,
+      findingCount: 3,
+      proposals: expect.arrayContaining([
+        expect.objectContaining({ candidateKey: "investigate-fallback-spike" }),
+        expect.objectContaining({ candidateKey: "investigate-blocked-tool-spike" }),
+        expect.objectContaining({ candidateKey: "stabilize-failed-hand-run" })
+      ])
+    });
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:30:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalSessionAfterReplay = await proposalRepository.getSession();
+    const regressionWatchRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:regression-watch"
+    );
+    const regressionWatchSession = await regressionWatchRepository.getSession();
+
+    expect(proposalSessionAfterReplay?.toolEvents).toHaveLength(1);
+    expect(regressionWatchSession?.toolEvents[2]?.metadata).toMatchObject({
+      generatedProposalCount: 0,
+      reviewedSignalCount: 6,
+      skippedDuplicateProposalCount: 3,
+      findingCount: 3,
       audit: {
         toolId: "hand-run",
         policy: "scheduled-safe",
@@ -2016,6 +2993,34 @@ describe("worker session routes", () => {
           id: "gemini-review",
           readiness: "missing-secrets",
           requiredSecrets: [expect.objectContaining({ id: "gemini-api-key", configured: false })]
+        }),
+        expect.objectContaining({
+          id: "incident-triage",
+          readiness: "ready",
+          memoryScope: "session-only",
+          declaredTools: ["session-history", "hand-history", "audit-history", "runtime-state"],
+          declaredToolDetails: expect.arrayContaining([
+            expect.objectContaining({
+              id: "session-history",
+              capability: "diagnostics.read.session-history",
+              policy: "automatic-safe"
+            }),
+            expect.objectContaining({
+              id: "hand-history",
+              capability: "diagnostics.read.hand-history",
+              policy: "automatic-safe"
+            }),
+            expect.objectContaining({
+              id: "audit-history",
+              capability: "diagnostics.read.audit-history",
+              policy: "automatic-safe"
+            }),
+            expect.objectContaining({
+              id: "runtime-state",
+              capability: "diagnostics.read.runtime-state",
+              policy: "automatic-safe"
+            })
+          ])
         })
       ])
     );
@@ -2107,6 +3112,121 @@ describe("worker session routes", () => {
     expect(lastRun?.input.messages.some((message) => message.content.includes("Memory scope: session recall only."))).toBe(
       true
     );
+  });
+
+  it("injects bounded incident-triage diagnostics from session, hand, audit, and runtime state", async () => {
+    const { env } = createEnv({ aiMode: "success", appAuthToken: "letmein" });
+
+    const created = await worker.fetch(
+      new Request("https://aaronclaw.test/api/sessions", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const createdBody = (await created.json()) as { sessionId: string };
+
+    await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/messages`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          role: "assistant",
+          content: "The previous request fell back after knowledge-vault access was blocked.",
+          metadata: {
+            fallbackReason: "ai-error",
+            toolAuditTrail: [
+              {
+                toolId: "knowledge-vault",
+                capability: "memory.read.knowledge-vault",
+                policy: "automatic-safe",
+                outcome: "blocked",
+                detail: "Knowledge vault was blocked on the earlier turn.",
+                timestamp: "2026-03-10T09:00:00.000Z"
+              }
+            ]
+          }
+        })
+      }),
+      env as Env
+    );
+    await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/scheduled-maintenance/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    const chatted = await worker.fetch(
+      new Request(`https://aaronclaw.test/api/sessions/${createdBody.sessionId}/chat`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer letmein",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          content: "Diagnose why the assistant degraded and what I should check next.",
+          skillId: "incident-triage"
+        })
+      }),
+      env as Env
+    );
+    const chattedBody = (await chatted.json()) as {
+      session: {
+        messages: Array<{
+          metadata: Record<string, unknown> | null;
+        }>;
+      };
+    };
+    const assistantMetadata = chattedBody.session.messages[chattedBody.session.messages.length - 1]?.metadata;
+    const lastRun = (env.AI as FakeAiBinding).getLastRun();
+
+    expect(chatted.status).toBe(201);
+    expect(assistantMetadata).toMatchObject({
+      skillId: "incident-triage",
+      skillDeclaredTools: ["session-history", "hand-history", "audit-history", "runtime-state"],
+      toolAuditTrail: expect.arrayContaining([
+        expect.objectContaining({
+          toolId: "session-history",
+          capability: "diagnostics.read.session-history",
+          outcome: "succeeded"
+        }),
+        expect.objectContaining({
+          toolId: "hand-history",
+          capability: "diagnostics.read.hand-history",
+          outcome: "succeeded"
+        }),
+        expect.objectContaining({
+          toolId: "audit-history",
+          capability: "diagnostics.read.audit-history",
+          outcome: "succeeded"
+        }),
+        expect.objectContaining({
+          toolId: "runtime-state",
+          capability: "diagnostics.read.runtime-state",
+          outcome: "succeeded"
+        })
+      ])
+    });
+    expect(
+      lastRun?.input.messages.some((message) => message.content.includes("Incident diagnostics — session history evidence:"))
+    ).toBe(true);
+    expect(
+      lastRun?.input.messages.some((message) => message.content.includes("Incident diagnostics — hand history evidence:"))
+    ).toBe(true);
+    expect(lastRun?.input.messages.some((message) => message.content.includes("scheduled-maintenance"))).toBe(true);
+    expect(lastRun?.input.messages.some((message) => message.content.includes("Incident diagnostics — audit evidence:"))).toBe(
+      true
+    );
+    expect(lastRun?.input.messages.some((message) => message.content.includes("knowledge-vault"))).toBe(true);
+    expect(
+      lastRun?.input.messages.some((message) => message.content.includes("Incident diagnostics — runtime/provider state:"))
+    ).toBe(true);
+    expect(lastRun?.input.messages.some((message) => message.content.includes("activeModelId"))).toBe(true);
   });
 
   it("rejects a skill-gated chat request when required secrets are missing", async () => {

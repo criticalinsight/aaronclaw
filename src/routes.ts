@@ -56,6 +56,11 @@ export function buildBootstrapStatus(options: BootstrapStatusOptions = {}) {
       "POST /api/model",
       "GET /api/key",
       "POST /api/key",
+      "GET /api/improvements",
+      "GET /api/improvements/:proposalKey",
+      "POST /api/improvements/:proposalKey/approve",
+      "POST /api/improvements/:proposalKey/reject",
+      "POST /api/improvements/:proposalKey/pause",
       "GET /api/skills",
       "GET /api/skills/:id",
       "GET /api/hands",
@@ -175,6 +180,52 @@ export function parseSkillRoute(pathname: string): {
   return null;
 }
 
+export function parseImprovementRoute(pathname: string): {
+  proposalKey: string | null;
+  action: "list" | "detail" | "approve" | "reject" | "pause" | "promote" | "rollback";
+} | null {
+  const parts = pathname.split("/").filter(Boolean);
+
+  if (parts[0] !== "api" || parts[1] !== "improvements") {
+    return null;
+  }
+
+  if (parts.length === 2) {
+    return {
+      proposalKey: null,
+      action: "list"
+    };
+  }
+
+  const proposalKey = decodePathSegment(parts[2]);
+  if (!proposalKey) {
+    return null;
+  }
+
+  if (parts.length === 3) {
+    return {
+      proposalKey,
+      action: "detail"
+    };
+  }
+
+  if (
+    parts.length === 4 &&
+    (parts[3] === "approve" ||
+      parts[3] === "reject" ||
+      parts[3] === "pause" ||
+      parts[3] === "promote" ||
+      parts[3] === "rollback")
+  ) {
+    return {
+      proposalKey,
+      action: parts[3]
+    };
+  }
+
+  return null;
+}
+
 export function renderLandingPage(options: BootstrapStatusOptions = {}): string {
   const status = buildBootstrapStatus(options);
   const bootstrap = JSON.stringify(status).replace(/</g, "\\u003c");
@@ -206,8 +257,9 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       .section-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
       .muted { font-size: 14px; color: #94a3b8; }
       .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 10px; background: #0f172a; border: 1px solid #4b5563; font-size: 12px; }
-      .pill.active, .pill.ready, .pill.succeeded { border-color: #10b981; color: #6ee7b7; }
-      .pill.paused, .pill.missing-secrets, .pill.failed { border-color: #f59e0b; color: #fbbf24; }
+      .pill.active, .pill.ready, .pill.succeeded, .pill.approved, .pill.promoted { border-color: #10b981; color: #6ee7b7; }
+      .pill.paused, .pill.missing-secrets, .pill.failed, .pill.shadowing { border-color: #f59e0b; color: #fbbf24; }
+      .pill.rejected, .pill.rolled-back { border-color: #ef4444; color: #fca5a5; }
       .detail-list, .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; color: #cbd5e1; }
       details { border-top: 1px solid #374151; padding-top: 10px; }
       details summary { cursor: pointer; color: #93c5fd; }
@@ -259,7 +311,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         <div class="section-header">
           <div class="stack">
             <h2>Operator controls</h2>
-            <p class="muted">Protected hands and skills controls reuse the existing bearer-token surface. Enter the deployment token when auth is enabled, then refresh to inspect or operate bundled hands safely.</p>
+            <p class="muted">Protected hands, skills, and improvement candidates reuse the existing bearer-token surface. Enter the deployment token when auth is enabled, then refresh to inspect evidence, lifecycle history, and bounded operator actions safely.</p>
           </div>
           <div class="actions">
             <button id="refresh-operators" type="button" class="secondary">Refresh operator data</button>
@@ -276,6 +328,12 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
             <h3>Skills</h3>
             <div id="skills" class="stack">
               <div class="empty">Load operator data to inspect skills.</div>
+            </div>
+          </section>
+          <section class="stack">
+            <h3>Improvement candidates</h3>
+            <div id="improvements" class="stack">
+              <div class="empty">Load operator data to inspect self-improvement candidates.</div>
             </div>
           </section>
         </div>
@@ -315,6 +373,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       const promptInput = document.querySelector("#prompt");
       const statusElement = document.querySelector("#status");
       const handsElement = document.querySelector("#hands");
+      const improvementsElement = document.querySelector("#improvements");
       const skillsElement = document.querySelector("#skills");
       const messagesElement = document.querySelector("#messages");
       const sessionMetaElement = document.querySelector("#session-meta");
@@ -327,6 +386,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       const state = {
         busy: false,
         hands: [],
+        improvements: [],
         session: null,
         sessionId: new URL(window.location.href).searchParams.get("session") || "",
         skills: []
@@ -368,6 +428,26 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         }
 
         run(() => setHandLifecycle(handId, action));
+      });
+
+      improvementsElement.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+
+        const button = target.closest("button[data-proposal-key][data-improvement-action]");
+        if (!(button instanceof HTMLButtonElement)) {
+          return;
+        }
+
+        const proposalKey = button.dataset.proposalKey;
+        const action = button.dataset.improvementAction;
+        if (!proposalKey || (action !== "approve" && action !== "reject" && action !== "pause")) {
+          return;
+        }
+
+        run(() => setImprovementLifecycle(proposalKey, action));
       });
 
       void initialize();
@@ -464,16 +544,24 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       }
 
       async function refreshOperatorData() {
-        const [handsPayload, skillsPayload] = await Promise.all([
+        const [handsPayload, skillsPayload, improvementsPayload] = await Promise.all([
           apiFetch("/api/hands"),
-          apiFetch("/api/skills")
+          apiFetch("/api/skills"),
+          apiFetch("/api/improvements")
         ]);
 
         state.hands = Array.isArray(handsPayload.hands) ? handsPayload.hands : [];
+        state.improvements = Array.isArray(improvementsPayload.proposals) ? improvementsPayload.proposals : [];
         state.skills = Array.isArray(skillsPayload.skills) ? skillsPayload.skills : [];
         renderOperators();
         renderStatus(
-          "Refreshed operator data for " + state.hands.length + " hand(s) and " + state.skills.length + " skill(s)."
+          "Refreshed operator data for " +
+            state.hands.length +
+            " hand(s), " +
+            state.skills.length +
+            " skill(s), and " +
+            state.improvements.length +
+            " improvement candidate(s)."
         );
       }
 
@@ -483,6 +571,18 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         });
         await refreshOperatorData();
         renderStatus((action === "activate" ? "Activated " : "Paused ") + handId + " through the protected operator surface.");
+      }
+
+      async function setImprovementLifecycle(proposalKey, action) {
+        await apiFetch("/api/improvements/" + encodeURIComponent(proposalKey) + "/" + action, {
+          method: "POST"
+        });
+        await refreshOperatorData();
+        renderStatus(
+          (action === "approve" ? "Approved " : action === "reject" ? "Rejected " : "Paused ") +
+            proposalKey +
+            " through the protected operator surface."
+        );
       }
 
       async function apiFetch(path, init = {}) {
@@ -568,6 +668,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
 
       function renderOperators() {
         renderHands();
+        renderImprovements();
         renderSkills();
       }
 
@@ -670,6 +771,100 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         ].join("");
       }
 
+      function renderImprovements() {
+        if (!state.improvements.length) {
+          improvementsElement.innerHTML =
+            '<div class="empty">' +
+            escapeHtml(
+              bootstrap.authMode === "bearer-token" && (!tokenInput || !tokenInput.value.trim())
+                ? "Enter the deployment token, then refresh operator data to inspect improvement candidates."
+                : "No structured improvement candidates have been recorded yet. Run the Improvement Hand and refresh operator data after it completes."
+            ) +
+            "</div>";
+          return;
+        }
+
+        improvementsElement.innerHTML = state.improvements
+          .map((proposal) => {
+            const evidence = Array.isArray(proposal.evidence) ? proposal.evidence : [];
+            const lifecycleHistory = Array.isArray(proposal.lifecycleHistory) ? proposal.lifecycleHistory : [];
+            const canApprove = proposal.status === "awaiting-approval" || proposal.status === "paused";
+            const canPause = proposal.status === "awaiting-approval";
+            const canReject =
+              proposal.status !== "rejected" && proposal.status !== "promoted" && proposal.status !== "rolled-back";
+
+            return [
+              '<article class="operator-card">',
+              '  <div class="section-header">',
+              '    <div class="stack">',
+              '      <strong>' + escapeHtml(proposal.summary) + '</strong>',
+              '      <span class="muted">' + escapeHtml(proposal.proposedAction) + '</span>',
+              "    </div>",
+              '    <span class="pill ' + escapeHtml(proposal.status) + '">' + escapeHtml(proposal.status) + '</span>',
+              "  </div>",
+              '  <ul class="detail-list">',
+              '    <li><strong>Proposal key:</strong> <code>' + escapeHtml(proposal.proposalKey) + '</code></li>',
+              '    <li><strong>Candidate key:</strong> <code>' + escapeHtml(proposal.candidateKey) + '</code></li>',
+              '    <li><strong>Source session:</strong> <code>' + escapeHtml(proposal.sourceSessionId) + '</code></li>',
+              '    <li><strong>Risk:</strong> ' + escapeHtml(proposal.riskLevel) + '</li>',
+              '    <li><strong>Shadow:</strong> ' + escapeHtml(proposal.shadowEvaluation?.status || "pending") + '</li>',
+              '    <li><strong>Approval:</strong> ' + escapeHtml(proposal.approval?.status || "pending") + '</li>',
+              '    <li><strong>Signals:</strong> ' + escapeHtml((proposal.derivedFromSignalKeys || []).join(", ") || "none") + '</li>',
+              "  </ul>",
+              '  <div class="actions">',
+              '    <button type="button" data-proposal-key="' +
+                escapeHtml(proposal.proposalKey) +
+                '" data-improvement-action="approve"' +
+                (canApprove ? "" : " disabled") +
+                '>Approve</button>',
+              '    <button type="button" class="secondary" data-proposal-key="' +
+                escapeHtml(proposal.proposalKey) +
+                '" data-improvement-action="pause"' +
+                (canPause ? "" : " disabled") +
+                '>Pause</button>',
+              '    <button type="button" class="secondary" data-proposal-key="' +
+                escapeHtml(proposal.proposalKey) +
+                '" data-improvement-action="reject"' +
+                (canReject ? "" : " disabled") +
+                '>Reject</button>',
+              "  </div>",
+              '<details>',
+              '  <summary>Evidence summary</summary>',
+              evidence.length
+                ? '  <ul class="list">' +
+                    evidence
+                      .map((entry) => '<li>' + escapeHtml(entry.summary || "") + '</li>')
+                      .join("") +
+                    '</ul>'
+                : '  <div class="empty">No evidence summary was stored for this candidate.</div>',
+              '</details>',
+              '<details>',
+              '  <summary>Lifecycle history</summary>',
+              lifecycleHistory.length
+                ? '  <ul class="list">' +
+                    lifecycleHistory
+                      .slice()
+                      .reverse()
+                      .map((entry) =>
+                        '<li><span class="pill ' +
+                        escapeHtml(entry.toStatus || "") +
+                        '">' +
+                        escapeHtml(entry.toStatus || "unknown") +
+                        '</span> ' +
+                        escapeHtml(entry.summary || "") +
+                        (entry.timestamp ? ' <span class="muted">' + escapeHtml(entry.timestamp) + '</span>' : '') +
+                        '</li>'
+                      )
+                      .join("") +
+                    '</ul>'
+                : '  <div class="empty">No lifecycle history is recorded yet.</div>',
+              '</details>',
+              '</article>'
+            ].join("");
+          })
+          .join("");
+      }
+
       function renderSkills() {
         if (!state.skills.length) {
           skillsElement.innerHTML =
@@ -757,6 +952,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
             message,
             sessionId: state.sessionId || null,
             handCount: state.hands.length,
+            improvementCount: state.improvements.length,
             skillCount: state.skills.length,
             authMode: bootstrap.authMode,
             assistantRuntime: bootstrap.assistantRuntime,
@@ -819,4 +1015,13 @@ function buildAssistantFallbackBehavior(input: {
   }
 
   return "Gemini is the active assistant path. If Gemini is unavailable, AaronClaw falls back to deterministic reply behavior.";
+}
+
+function decodePathSegment(segment: string): string | null {
+  try {
+    const decoded = decodeURIComponent(segment);
+    return decoded.length ? decoded : null;
+  } catch {
+    return null;
+  }
 }

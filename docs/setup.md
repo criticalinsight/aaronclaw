@@ -61,12 +61,19 @@ The operator section can inspect hands and skills today and can activate/pauseha
 
 ## What to expect locally
 
-- The bundled `scheduled-maintenance` hand is visible in operator controls and
-  starts paused until an operator activates it.
+- The bundled hands currently shipped are `scheduled-maintenance`,
+  `improvement-hand`, `user-correction-miner`, `regression-watch`,
+  `provider-health-watchdog`, and `docs-drift`; each is visible in operator
+  controls and starts paused until an operator activates it.
+- The bundled skills currently shipped are `aarondb-research`,
+  `gemini-review`, and `incident-triage`.
 - `aarondb-research` is ready by default and can use session recall plus the
   knowledge-vault path.
 - `gemini-review` stays unready until Gemini key material is configured; chat
   requests that opt into that skill return `409` until then.
+- `docs-drift` records bounded reviewable findings when the shipped runtime
+  posture meaningfully diverges from this docs set; it never edits repo docs
+  automatically.
 - The protected `/api/key` operator flow validates Gemini keys on set or when
   re-checking them, but skill readiness itself is based on whether the required
   secret is present.

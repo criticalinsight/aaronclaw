@@ -2,21 +2,39 @@ import {
   type JsonValue,
   type JsonObject,
   type MessageRole,
+  type SessionRecord,
   type SessionStateRepository
 } from "./session-state";
 import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
+import { listBundledHands } from "./hands-runtime";
 import { queryKnowledgeVault } from "./knowledge-vault";
-import { resolveModelSelection } from "./model-registry";
+import { resolveModelSelection, type ResolvedModelSelection } from "./model-registry";
 import { readPersistedModelSelection } from "./model-selection-store";
-import { readProviderKeyStatus, resolveProviderApiKey } from "./provider-key-store";
+import {
+  readProviderKeyStatus,
+  resolveProviderApiKey,
+  type ProviderKeyStatus
+} from "./provider-key-store";
 import { reflectSession } from "./reflection-engine";
 import {
   buildSkillPromptAdditions,
   buildSkillRuntimeMetadata,
-  readBundledSkillManifest
+  readBundledSkillManifest,
+  type ResolvedSkillManifest
 } from "./skills-runtime";
 import { buildToolAuditRecord, isSkillToolAllowed } from "./tool-policy";
+
+const DIAGNOSTIC_SKILL_TOOL_IDS = [
+  "session-history",
+  "hand-history",
+  "audit-history",
+  "runtime-state"
+] as const;
+const MAX_DIAGNOSTIC_SESSION_MESSAGES = 4;
+const MAX_DIAGNOSTIC_TOOL_EVENTS = 3;
+const MAX_DIAGNOSTIC_AUDITS = 6;
+const MAX_DIAGNOSTIC_HANDS = 4;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -211,6 +229,18 @@ export class SessionRuntime {
             }
           })
         );
+        const skillDiagnosticContext = skill
+          ? await buildSkillDiagnosticContext({
+              env: this.env,
+              sessionId,
+              session: userSession,
+              skill,
+              persistedModelId,
+              modelSelection,
+              geminiKeyStatus
+            })
+          : { promptAdditions: [], toolAuditTrail: [] };
+        toolAuditTrail.push(...skillDiagnosticContext.toolAuditTrail);
         const geminiApiKey =
           geminiKeyStatus.validation.status === "valid"
             ? await resolveProviderApiKey({
@@ -228,7 +258,9 @@ export class SessionRuntime {
           knowledgeVaultMatches: knowledgeVault.matches,
           primaryRoute: buildAssistantRoute(modelSelection.activeModel, geminiApiKey),
           fallbackRoute: buildFallbackAssistantRoute(modelSelection, geminiApiKey),
-          promptAdditions: skill ? buildSkillPromptAdditions(skill) : undefined
+          promptAdditions: skill
+            ? [...buildSkillPromptAdditions(skill), ...skillDiagnosticContext.promptAdditions]
+            : undefined
         });
         const session = await repository.appendMessage({
           timestamp: new Date().toISOString(),
@@ -395,6 +427,258 @@ function buildFallbackAssistantRoute(
         apiKey: geminiApiKey
       }
     : null;
+}
+
+async function buildSkillDiagnosticContext(input: {
+  env: Pick<Env, "AARONDB" | "AI">;
+  sessionId: string;
+  session: SessionRecord;
+  skill: ResolvedSkillManifest;
+  persistedModelId: string | null;
+  modelSelection: ResolvedModelSelection;
+  geminiKeyStatus: ProviderKeyStatus;
+}): Promise<{ promptAdditions: string[]; toolAuditTrail: JsonObject[] }> {
+  if (!DIAGNOSTIC_SKILL_TOOL_IDS.some((toolId) => input.skill.declaredTools.includes(toolId))) {
+    return { promptAdditions: [], toolAuditTrail: [] };
+  }
+
+  const promptAdditions: string[] = [];
+  const toolAuditTrail: JsonObject[] = [];
+  const timestamp = new Date().toISOString();
+  const handsNeeded =
+    isSkillToolAllowed("hand-history", input.skill.declaredTools) ||
+    isSkillToolAllowed("audit-history", input.skill.declaredTools);
+  const hands = handsNeeded ? await listBundledHands({ env: input.env }) : [];
+
+  if (isSkillToolAllowed("session-history", input.skill.declaredTools)) {
+    promptAdditions.push(buildSessionHistoryDiagnosticMessage(input.session));
+    toolAuditTrail.push(
+      buildToolAuditRecord({
+        toolId: "session-history",
+        actor: "session-runtime",
+        scope: "session",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        skillId: input.skill.id,
+        detail: `Prepared bounded session-history evidence from ${input.session.messages.length} message(s) and ${input.session.toolEvents.length} tool event(s).`,
+        extra: {
+          messageCount: input.session.messages.length,
+          toolEventCount: input.session.toolEvents.length,
+          recallableMemoryCount: input.session.recallableMemoryCount
+        }
+      })
+    );
+  }
+
+  if (isSkillToolAllowed("hand-history", input.skill.declaredTools)) {
+    promptAdditions.push(buildHandHistoryDiagnosticMessage(hands));
+    toolAuditTrail.push(
+      buildToolAuditRecord({
+        toolId: "hand-history",
+        actor: "session-runtime",
+        scope: "session",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        skillId: input.skill.id,
+        detail: `Prepared bounded hand-history evidence for ${hands.length} bundled hand(s).`,
+        extra: {
+          handCount: hands.length,
+          activeHandCount: hands.filter((hand) => hand.status === "active").length
+        }
+      })
+    );
+  }
+
+  if (isSkillToolAllowed("audit-history", input.skill.declaredTools)) {
+    const auditRecords = collectRecentAuditRecords(input.session, hands);
+    promptAdditions.push(buildAuditDiagnosticMessage(auditRecords));
+    toolAuditTrail.push(
+      buildToolAuditRecord({
+        toolId: "audit-history",
+        actor: "session-runtime",
+        scope: "session",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        skillId: input.skill.id,
+        detail: `Prepared bounded audit-history evidence from ${auditRecords.length} persisted audit record(s).`,
+        extra: {
+          auditRecordCount: auditRecords.length
+        }
+      })
+    );
+  }
+
+  if (isSkillToolAllowed("runtime-state", input.skill.declaredTools)) {
+    promptAdditions.push(
+      buildRuntimeStateDiagnosticMessage({
+        workersAiBound: Boolean(input.env.AI),
+        persistedModelId: input.persistedModelId,
+        modelSelection: input.modelSelection,
+        geminiKeyStatus: input.geminiKeyStatus
+      })
+    );
+    toolAuditTrail.push(
+      buildToolAuditRecord({
+        toolId: "runtime-state",
+        actor: "session-runtime",
+        scope: "session",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        skillId: input.skill.id,
+        detail: `Prepared bounded runtime-state evidence for active model ${input.modelSelection.activeModelId ?? "none"}.`,
+        extra: {
+          workersAiBound: Boolean(input.env.AI),
+          persistedModelId: input.persistedModelId,
+          activeModelId: input.modelSelection.activeModelId,
+          geminiConfigured: input.geminiKeyStatus.configured,
+          geminiValidationStatus: input.geminiKeyStatus.validation.status
+        }
+      })
+    );
+  }
+
+  return { promptAdditions, toolAuditTrail };
+}
+
+function buildSessionHistoryDiagnosticMessage(session: SessionRecord): string {
+  const recentMessages = session.messages.slice(-MAX_DIAGNOSTIC_SESSION_MESSAGES);
+  const recentToolEvents = session.toolEvents.slice(-MAX_DIAGNOSTIC_TOOL_EVENTS);
+
+  return [
+    "Incident diagnostics — session history evidence:",
+    `- sessionId: ${session.id}`,
+    `- lastActiveAt: ${session.lastActiveAt}`,
+    `- recallableMemoryCount: ${session.recallableMemoryCount}`,
+    `- messageCount: ${session.messages.length}`,
+    ...(recentMessages.length > 0
+      ? [
+          "- recentMessages:",
+          ...recentMessages.map(
+            (message, index) =>
+              `  ${index + 1}. [${message.role} @ ${message.createdAt}] ${trimDiagnosticText(message.content, 140)}`
+          )
+        ]
+      : ["- recentMessages: none"]),
+    ...(recentToolEvents.length > 0
+      ? [
+          "- recentToolEvents:",
+          ...recentToolEvents.map(
+            (event, index) =>
+              `  ${index + 1}. [${event.toolName} @ ${event.createdAt}] ${trimDiagnosticText(event.summary, 140)}`
+          )
+        ]
+      : ["- recentToolEvents: none"])
+  ].join("\n");
+}
+
+function buildHandHistoryDiagnosticMessage(
+  hands: Awaited<ReturnType<typeof listBundledHands>>
+): string {
+  const visibleHands = hands.slice(0, MAX_DIAGNOSTIC_HANDS);
+
+  return [
+    "Incident diagnostics — hand history evidence:",
+    `- bundledHandCount: ${hands.length}`,
+    ...(visibleHands.length > 0
+      ? visibleHands.map(
+          (hand, index) =>
+            `${index + 1}. ${hand.id} status=${hand.status} lastAction=${hand.lastLifecycleAction ?? "none"} latestRun=${hand.latestRun?.status ?? "none"} recentRuns=${hand.recentRuns.length}`
+        )
+      : ["- no bundled hand state is available yet"])
+  ].join("\n");
+}
+
+function buildAuditDiagnosticMessage(audits: DiagnosticAuditRecord[]): string {
+  return [
+    "Incident diagnostics — audit evidence:",
+    `- auditRecordCount: ${audits.length}`,
+    ...(audits.length > 0
+      ? audits.map(
+          (audit, index) =>
+            `${index + 1}. [${audit.source}] ${audit.toolId} outcome=${audit.outcome ?? "unknown"}${audit.capability ? ` capability=${audit.capability}` : ""}${audit.timestamp ? ` at ${audit.timestamp}` : ""}${audit.detail ? ` — ${trimDiagnosticText(audit.detail, 160)}` : ""}`
+        )
+      : ["- no persisted audit evidence was found in prior assistant metadata or hand history"])
+  ].join("\n");
+}
+
+function buildRuntimeStateDiagnosticMessage(input: {
+  workersAiBound: boolean;
+  persistedModelId: string | null;
+  modelSelection: ResolvedModelSelection;
+  geminiKeyStatus: ProviderKeyStatus;
+}): string {
+  return [
+    "Incident diagnostics — runtime/provider state:",
+    `- workersAiBound: ${input.workersAiBound ? "yes" : "no"}`,
+    `- persistedModelId: ${input.persistedModelId ?? "none"}`,
+    `- requestedModelId: ${input.modelSelection.requestedModelId ?? "none"}`,
+    `- activeModelId: ${input.modelSelection.activeModelId ?? "none"}`,
+    `- activeProvider: ${input.modelSelection.activeModel?.provider ?? "none"}`,
+    `- geminiConfigured: ${input.geminiKeyStatus.configured ? "yes" : "no"}`,
+    `- geminiValidationStatus: ${input.geminiKeyStatus.validation.status}`,
+    `- geminiKeySource: ${input.geminiKeyStatus.source}`,
+    `- geminiKeyStorage: ${input.geminiKeyStatus.storage}`,
+    `- geminiValidationDetail: ${trimDiagnosticText(input.geminiKeyStatus.validation.detail ?? "none", 160)}`
+  ].join("\n");
+}
+
+type DiagnosticAuditRecord = {
+  timestamp: string | null;
+  source: string;
+  toolId: string;
+  outcome: string | null;
+  capability: string | null;
+  detail: string | null;
+};
+
+function collectRecentAuditRecords(
+  session: SessionRecord,
+  hands: Awaited<ReturnType<typeof listBundledHands>>
+): DiagnosticAuditRecord[] {
+  const sessionAudits = session.messages.flatMap((message) =>
+    message.role !== "assistant"
+      ? []
+      : extractToolAuditTrail(message.metadata).map((audit) => ({
+          timestamp: typeof audit.timestamp === "string" ? audit.timestamp : message.createdAt,
+          source: `session:${message.id}`,
+          toolId: typeof audit.toolId === "string" ? audit.toolId : "unknown-tool",
+          outcome: typeof audit.outcome === "string" ? audit.outcome : null,
+          capability: typeof audit.capability === "string" ? audit.capability : null,
+          detail: typeof audit.detail === "string" ? audit.detail : null
+        }))
+  );
+  const handAudits = hands.flatMap((hand) =>
+    hand.recentAudit.map((audit) => ({
+      timestamp: audit.timestamp,
+      source: `hand:${hand.id}`,
+      toolId: audit.toolName,
+      outcome: audit.outcome,
+      capability: audit.capability,
+      detail: audit.detail
+    }))
+  );
+
+  return [...sessionAudits, ...handAudits]
+    .sort((left, right) => (right.timestamp ?? "").localeCompare(left.timestamp ?? ""))
+    .slice(0, MAX_DIAGNOSTIC_AUDITS);
+}
+
+function extractToolAuditTrail(metadata: JsonObject | null): JsonObject[] {
+  const trail = metadata?.toolAuditTrail;
+
+  if (!Array.isArray(trail)) {
+    return [];
+  }
+
+  return trail.filter((entry): entry is JsonObject => isJsonObject(entry));
+}
+
+function trimDiagnosticText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 }
 
 function parseOptionalInteger(value: string | null): number | undefined {

@@ -3,13 +3,23 @@ import type { JsonObject, JsonValue } from "./session-state";
 export type ToolPolicy = "automatic-safe" | "operator-protected" | "admin-sensitive" | "scheduled-safe";
 export type ToolAuditActor = "session-runtime" | "maintenance-runtime" | "hand-runtime" | "operator-route";
 export type ToolAuditScope = "session" | "maintenance" | "hand" | "operator";
-export type SkillToolId = "session-recall" | "knowledge-vault" | "model-selection";
+export type SkillToolId =
+  | "session-recall"
+  | "knowledge-vault"
+  | "model-selection"
+  | "session-history"
+  | "hand-history"
+  | "audit-history"
+  | "runtime-state";
 export type ToolId =
   | SkillToolId
   | "provider-key-management"
   | "hand-lifecycle"
   | "hand-run"
+  | "improvement-candidate-review"
   | "improvement-proposal-review"
+  | "improvement-shadow-evaluation"
+  | "regression-watch-review"
   | "session-reflection"
   | "scheduled-maintenance"
   | "morning-briefing";
@@ -48,6 +58,38 @@ const TOOL_DEFINITIONS = {
     policy: "automatic-safe",
     declarationMode: "core-runtime"
   },
+  "session-history": {
+    id: "session-history",
+    label: "Session history",
+    description: "Reads recent session transcript and tool-event history for bounded diagnostics.",
+    capability: "diagnostics.read.session-history",
+    policy: "automatic-safe",
+    declarationMode: "skill-declared"
+  },
+  "hand-history": {
+    id: "hand-history",
+    label: "Hand history",
+    description: "Reads bundled hand lifecycle and recent run summaries for bounded diagnostics.",
+    capability: "diagnostics.read.hand-history",
+    policy: "automatic-safe",
+    declarationMode: "skill-declared"
+  },
+  "audit-history": {
+    id: "audit-history",
+    label: "Audit history",
+    description: "Reads persisted assistant and hand audit records for bounded diagnostics.",
+    capability: "diagnostics.read.audit-history",
+    policy: "automatic-safe",
+    declarationMode: "skill-declared"
+  },
+  "runtime-state": {
+    id: "runtime-state",
+    label: "Runtime state",
+    description: "Reads current model-selection and provider-readiness state for bounded diagnostics.",
+    capability: "diagnostics.read.runtime-state",
+    policy: "automatic-safe",
+    declarationMode: "skill-declared"
+  },
   "provider-key-management": {
     id: "provider-key-management",
     label: "Provider key management",
@@ -72,11 +114,35 @@ const TOOL_DEFINITIONS = {
     policy: "scheduled-safe",
     declarationMode: "scheduled"
   },
+  "improvement-candidate-review": {
+    id: "improvement-candidate-review",
+    label: "Improvement candidate review",
+    description: "Approves, rejects, pauses, promotes, or rolls back a stored improvement candidate.",
+    capability: "operator.control.improvements",
+    policy: "operator-protected",
+    declarationMode: "operator-only"
+  },
   "improvement-proposal-review": {
     id: "improvement-proposal-review",
     label: "Improvement proposal review",
     description: "Reviews stored reflection signals and writes structured improvement proposals.",
     capability: "improvement.propose.reflection",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "improvement-shadow-evaluation": {
+    id: "improvement-shadow-evaluation",
+    label: "Improvement shadow evaluation",
+    description: "Runs bounded shadow/trial evaluation on stored improvement proposals before approval.",
+    capability: "improvement.evaluate.shadow",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "regression-watch-review": {
+    id: "regression-watch-review",
+    label: "Regression watch review",
+    description: "Detects bounded regression findings and writes evidence-backed follow-up proposals.",
+    capability: "improvement.detect.regressions",
     policy: "scheduled-safe",
     declarationMode: "scheduled"
   },
@@ -106,7 +172,15 @@ const TOOL_DEFINITIONS = {
   }
 } as const satisfies Record<ToolId, ToolDefinition>;
 
-const SKILL_TOOL_IDS = new Set<SkillToolId>(["session-recall", "knowledge-vault", "model-selection"]);
+const SKILL_TOOL_IDS = new Set<SkillToolId>([
+  "session-recall",
+  "knowledge-vault",
+  "model-selection",
+  "session-history",
+  "hand-history",
+  "audit-history",
+  "runtime-state"
+]);
 
 export function getToolDefinition(toolId: string): ToolDefinition | null {
   return toolId in TOOL_DEFINITIONS ? TOOL_DEFINITIONS[toolId as ToolId] : null;

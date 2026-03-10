@@ -23,6 +23,12 @@ interface SkillManifest {
   promptInstructions: string[];
 }
 
+export interface BundledSkillCatalogEntry {
+  id: string;
+  label: string;
+  requiredSecretIds: string[];
+}
+
 export interface ResolvedSkillSecretRequirement {
   id: string;
   label: string;
@@ -71,8 +77,32 @@ const bundledSkillManifests = [
       "Keep review notes short, concrete, and grounded in the current request.",
       "Stay inside the declared tools and current session memory scope."
     ]
+  },
+  {
+    id: "incident-triage",
+    label: "Incident triage skill",
+    description:
+      "Explains failures from bounded session, hand, audit, and runtime/provider evidence without expanding beyond declared read-only diagnostics.",
+    manifestVersion: 1,
+    installScope: "bundled-local-only",
+    runtime: "cloudflare-worker",
+    declaredTools: ["session-history", "hand-history", "audit-history", "runtime-state"],
+    requiredSecrets: [],
+    memoryScope: "session-only",
+    promptInstructions: [
+      "Diagnose failures from the provided evidence blocks and distinguish observed facts from hypotheses.",
+      "Explain likely causes, confidence, and the next bounded operator checks without claiming hidden tools or hidden evidence."
+    ]
   }
 ] as const satisfies readonly SkillManifest[];
+
+export function getBundledSkillCatalog(): BundledSkillCatalogEntry[] {
+  return bundledSkillManifests.map((manifest) => ({
+    id: manifest.id,
+    label: manifest.label,
+    requiredSecretIds: manifest.requiredSecrets.map((secret) => secret.id)
+  }));
+}
 
 export async function listBundledSkills(input: {
   env: Pick<Env, "AARONDB" | "APP_AUTH_TOKEN" | "GEMINI_API_KEY">;

@@ -1,6 +1,7 @@
 import {
   buildBootstrapStatus,
   parseHandRoute,
+  parseImprovementRoute,
   parseSkillRoute,
   parseSessionRoute,
   renderLandingPage
@@ -26,6 +27,7 @@ import {
   readPersistedModelSelection,
   setPersistedModelSelection
 } from "./model-selection-store";
+import { readImprovementProposalState, recordImprovementLifecycleAction } from "./reflection-engine";
 import { SessionRuntime } from "./session-runtime";
 import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
 import {
@@ -457,6 +459,68 @@ async function handleHandRoute(request: Request, env: Env, pathname: string): Pr
   return hand ? json({ hand }) : json({ error: "hand not found" }, 404);
 }
 
+async function handleImprovementRoute(
+  request: Request,
+  env: Env,
+  pathname: string
+): Promise<Response | null> {
+  const route = parseImprovementRoute(pathname);
+
+  if (!route) {
+    return null;
+  }
+
+  const proposalState = await readImprovementProposalState({ env });
+
+  if (route.action === "list") {
+    if (request.method !== "GET") {
+      return json({ error: "method not allowed", methods: ["GET"] }, 405);
+    }
+
+    const proposals = [...proposalState.proposals].sort((left, right) => {
+      const leftTimestamp = left.lifecycleHistory[left.lifecycleHistory.length - 1]?.timestamp ?? left.proposalKey;
+      const rightTimestamp = right.lifecycleHistory[right.lifecycleHistory.length - 1]?.timestamp ?? right.proposalKey;
+      return rightTimestamp.localeCompare(leftTimestamp);
+    });
+
+    return json({ proposalSessionId: proposalState.proposalSessionId, proposals });
+  }
+
+  const proposalKey = route.proposalKey;
+  if (!proposalKey) {
+    return json({ error: "proposal key is required" }, 400);
+  }
+
+  const proposal = proposalState.proposals.find((entry) => entry.proposalKey === proposalKey);
+  if (!proposal) {
+    return json({ error: "candidate not found" }, 404);
+  }
+
+  if (route.action === "detail") {
+    if (request.method !== "GET") {
+      return json({ error: "method not allowed", methods: ["GET"] }, 405);
+    }
+
+    return json({ proposalSessionId: proposalState.proposalSessionId, proposal });
+  }
+
+  if (request.method !== "POST") {
+    return json({ error: "method not allowed", methods: ["POST"] }, 405);
+  }
+
+  try {
+    const updatedProposal = await recordImprovementLifecycleAction({
+      env,
+      proposalKey,
+      action: route.action
+    });
+
+    return json({ proposalSessionId: proposalState.proposalSessionId, proposal: updatedProposal });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : "improvement lifecycle update failed" }, 400);
+  }
+}
+
 async function handleSkillRoute(request: Request, env: Env, pathname: string): Promise<Response | null> {
   const route = parseSkillRoute(pathname);
 
@@ -527,14 +591,19 @@ export default {
       return handleKeyRoute(request, env);
     }
 
-    const skillRouteResponse = await handleSkillRoute(request, env, url.pathname);
-    if (skillRouteResponse) {
-      return skillRouteResponse;
-    }
-
     const handRouteResponse = await handleHandRoute(request, env, url.pathname);
     if (handRouteResponse) {
       return handRouteResponse;
+    }
+
+    const improvementRouteResponse = await handleImprovementRoute(request, env, url.pathname);
+    if (improvementRouteResponse) {
+      return improvementRouteResponse;
+    }
+
+    const skillRouteResponse = await handleSkillRoute(request, env, url.pathname);
+    if (skillRouteResponse) {
+      return skillRouteResponse;
     }
 
     if (request.method === "POST" && url.pathname === "/api/sessions") {

@@ -18,10 +18,13 @@ const REFLECTION_PREFIX = "reflection:";
 const MAINTENANCE_PREFIX = "maintenance:";
 const HAND_PREFIX = "hand:";
 const IMPROVEMENT_PREFIX = "improvement:";
-const IMPROVEMENT_PROPOSAL_SESSION_ID = `${IMPROVEMENT_PREFIX}proposals`;
+export const IMPROVEMENT_PROPOSAL_SESSION_ID = `${IMPROVEMENT_PREFIX}proposals`;
 const MAINTENANCE_CRON = "*/30 * * * *";
 const MORNING_BRIEFING_CRON = "0 8 * * *";
 const MAX_MAINTENANCE_SESSIONS = 5;
+const MAX_USER_CORRECTION_SESSIONS = 12;
+const MIN_REPEATED_USER_CORRECTIONS = 2;
+const MAX_USER_CORRECTION_EVIDENCE = 3;
 const SIGNAL_TERMS = [
   "because",
   "evidence",
@@ -39,10 +42,32 @@ interface FactRow {
   occurred_at: string;
 }
 
-type ImprovementRiskLevel = "low" | "medium" | "high";
-type ImprovementVerificationStatus = "pending" | "verified" | "not-needed";
+export type ImprovementRiskLevel = "low" | "medium" | "high";
+export type ImprovementVerificationStatus = "pending" | "verified" | "not-needed";
+export type ImprovementCandidateStatus =
+  | "proposed"
+  | "shadowing"
+  | "awaiting-approval"
+  | "approved"
+  | "promoted"
+  | "rejected"
+  | "paused"
+  | "rolled-back";
+type ImprovementShadowStatus = "pending" | "completed";
+type ImprovementShadowVerdict = "pending" | "awaiting-approval";
+type ImprovementApprovalStatus = "pending" | "approved" | "rejected";
+type ImprovementPromotionStatus = "not-promoted" | "promoted" | "rolled-back";
+export type ImprovementLifecycleAction =
+  | "propose"
+  | "start-shadow"
+  | "complete-shadow"
+  | "pause"
+  | "approve"
+  | "promote"
+  | "reject"
+  | "rollback";
 
-interface ImprovementEvidenceRecord extends JsonObject {
+export interface ImprovementEvidenceRecord extends JsonObject {
   kind: "audit" | "message" | "tool-event" | "metric";
   summary: string;
   eventId: string | null;
@@ -50,13 +75,54 @@ interface ImprovementEvidenceRecord extends JsonObject {
   excerpt: string | null;
 }
 
-interface ImprovementRiskRecord extends JsonObject {
+export interface ImprovementRiskRecord extends JsonObject {
   level: ImprovementRiskLevel;
   summary: string;
 }
 
-interface ImprovementVerificationRecord extends JsonObject {
+export interface ImprovementVerificationRecord extends JsonObject {
   status: ImprovementVerificationStatus;
+  summary: string;
+}
+
+interface ImprovementShadowEvaluationRecord extends JsonObject {
+  mode: "bounded-metadata-shadow";
+  status: ImprovementShadowStatus;
+  verdict: ImprovementShadowVerdict;
+  baselineSummary: string;
+  candidateSummary: string;
+  comparisonSummary: string;
+  baselineEvidenceCount: number;
+  baselineRiskLevel: ImprovementRiskLevel;
+  baselineVerificationStatus: ImprovementVerificationStatus;
+  candidateRiskLevel: ImprovementRiskLevel;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+interface ImprovementApprovalRecord extends JsonObject {
+  requiresProtectedApproval: true;
+  status: ImprovementApprovalStatus;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  summary: string;
+}
+
+interface ImprovementPromotionRecord extends JsonObject {
+  status: ImprovementPromotionStatus;
+  promotedAt: string | null;
+  rolledBackAt: string | null;
+  productionMutation: "manual-only";
+  liveMutationApplied: false;
+  summary: string;
+}
+
+interface ImprovementLifecycleEntryRecord extends JsonObject {
+  action: ImprovementLifecycleAction;
+  fromStatus: ImprovementCandidateStatus | "none";
+  toStatus: ImprovementCandidateStatus;
+  actor: "hand-runtime" | "operator-route";
+  timestamp: string;
   summary: string;
 }
 
@@ -72,7 +138,7 @@ export interface ImprovementSignalRecord extends JsonObject {
 
 export interface ImprovementCandidateRecord extends JsonObject {
   candidateKey: string;
-  status: "proposed";
+  status: ImprovementCandidateStatus;
   summary: string;
   problemStatement: string;
   proposedAction: string;
@@ -83,6 +149,10 @@ export interface ImprovementCandidateRecord extends JsonObject {
   evidence: ImprovementEvidenceRecord[];
   risk: ImprovementRiskRecord;
   verification: ImprovementVerificationRecord;
+  shadowEvaluation: ImprovementShadowEvaluationRecord;
+  approval: ImprovementApprovalRecord;
+  promotion: ImprovementPromotionRecord;
+  lifecycleHistory: ImprovementLifecycleEntryRecord[];
 }
 
 export interface ImprovementProposalRecord extends ImprovementCandidateRecord {
@@ -116,6 +186,110 @@ export interface ImprovementProposalReviewResult {
   reviewedSignalCount: number;
   generatedProposalCount: number;
   skippedDuplicateProposalCount: number;
+}
+
+export interface UserCorrectionMiningResult {
+  cron: string;
+  proposalSessionId: string;
+  reviewedSessionIds: string[];
+  correctionSignalCount: number;
+  correctionSignals: ImprovementSignalRecord[];
+  matchedCorrectionCount: number;
+  generatedProposalCount: number;
+  skippedDuplicateProposalCount: number;
+}
+
+type UserCorrectionPatternKey =
+  | "evidence-contract"
+  | "tool-backed-investigation"
+  | "instruction-restatement";
+
+interface UserCorrectionPatternDefinition {
+  patternKey: UserCorrectionPatternKey;
+  signalKey: string;
+  candidateKey: string;
+  category: ImprovementSignalRecord["category"];
+  signalSummary: string;
+  candidateSummary: string;
+  proposedAction: string;
+  expectedBenefit: string;
+  riskLevel: ImprovementRiskLevel;
+  riskSummary: string;
+  verificationPlan: string;
+}
+
+interface UserCorrectionMatch {
+  sessionId: string;
+  assistantMessage: MessageEvent;
+  correctionMessage: MessageEvent;
+  pattern: UserCorrectionPatternDefinition;
+}
+
+const USER_CORRECTION_PATTERNS: readonly UserCorrectionPatternDefinition[] = [
+  {
+    patternKey: "evidence-contract",
+    signalKey: "repeated-user-correction-evidence-contract",
+    candidateKey: "strengthen-evidence-contract-from-corrections",
+    category: "verification",
+    signalSummary:
+      "Recent session history shows repeated user/operator corrections asking for evidence or proof after an assistant answer.",
+    candidateSummary:
+      "Strengthen the answer contract so evidence/proof requests are satisfied before users need to correct the assistant.",
+    proposedAction:
+      "Strengthen the answer contract so evidence/proof requests are satisfied before users need to correct the assistant.",
+    expectedBenefit:
+      "Reduces repeated evidence-seeking corrections while keeping the live runtime bounded and review-driven.",
+    riskLevel: "medium",
+    riskSummary:
+      "Tightening the evidence contract may increase latency or explicit uncertainty, so it should move through review rather than mutate production behavior directly.",
+    verificationPlan:
+      "Verify later sessions reduce repeated evidence/proof corrections without regressing current chat, hands, or Telegram stability."
+  },
+  {
+    patternKey: "tool-backed-investigation",
+    signalKey: "repeated-user-correction-tool-investigation",
+    candidateKey: "add-tool-backed-investigation-after-corrections",
+    category: "verification",
+    signalSummary:
+      "Recent session history shows repeated user/operator corrections asking the assistant to inspect logs, traces, or tools before concluding.",
+    candidateSummary:
+      "Prompt tool-backed investigation before confident conclusions when repeated corrections ask for inspection or trace review.",
+    proposedAction:
+      "Prompt tool-backed investigation before confident conclusions when repeated corrections ask for inspection or trace review.",
+    expectedBenefit:
+      "Moves repeated correction pressure into a structured reviewable proposal for better evidence discipline.",
+    riskLevel: "medium",
+    riskSummary:
+      "Extra tool-backed investigation can increase cost or latency, so it should be reviewed before any wider adoption.",
+    verificationPlan:
+      "Verify later sessions record the expected tool traces and reduce repeated inspection/trace corrections for similar asks."
+  },
+  {
+    patternKey: "instruction-restatement",
+    signalKey: "repeated-user-correction-instruction-restatement",
+    candidateKey: "reduce-instruction-drift-from-corrections",
+    category: "follow-up",
+    signalSummary:
+      "Recent session history shows repeated user/operator corrections restating constraints after the assistant already answered.",
+    candidateSummary:
+      "Reduce instruction drift that forces users to restate constraints after the assistant responds.",
+    proposedAction:
+      "Reduce instruction drift that forces users to restate constraints after the assistant responds.",
+    expectedBenefit:
+      "Turns repeated constraint-restatement corrections into a bounded improvement candidate instead of hidden live prompt mutation.",
+    riskLevel: "low",
+    riskSummary:
+      "Constraint-handling changes are comparatively low risk, but they still require review to avoid overfitting to a narrow correction pattern.",
+    verificationPlan:
+      "Verify later sessions reduce repeated constraint-restatement corrections while preserving the current operator-facing behavior."
+  }
+] as const;
+
+export interface ImprovementShadowEvaluationResult {
+  cron: string;
+  proposalSessionId: string;
+  evaluatedProposalCount: number;
+  awaitingApprovalCount: number;
 }
 
 export async function reflectSession(input: {
@@ -163,7 +337,7 @@ export async function reflectSession(input: {
 
   const metrics = analyzeSession(sourceSession);
   const improvementSignals = buildImprovementSignals(sourceSession, metrics);
-  const improvementCandidates = buildImprovementCandidates(improvementSignals);
+  const improvementCandidates = buildImprovementCandidates(improvementSignals, timestamp);
   const summary = buildReflectionSummary(sourceSession, metrics);
 
   await reflectionRepository.appendToolEvent({
@@ -287,7 +461,7 @@ export async function runScheduledImprovementProposalReview(input: {
   const proposalMap = new Map<string, ImprovementProposalRecord>();
 
   for (const artifact of storedReflections) {
-    for (const proposal of buildImprovementProposals(artifact)) {
+    for (const proposal of buildImprovementProposals(artifact, timestamp)) {
       if (!proposalMap.has(proposal.proposalKey)) {
         proposalMap.set(proposal.proposalKey, proposal);
       }
@@ -347,7 +521,220 @@ export async function runScheduledImprovementProposalReview(input: {
   };
 }
 
-interface StoredReflectionArtifact {
+export async function runScheduledUserCorrectionMining(input: {
+  env: Pick<Env, "AARONDB">;
+  cron: string;
+  timestamp?: string;
+}): Promise<UserCorrectionMiningResult> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const reviewedSessionIds = await listRecentSessionIds(input.env.AARONDB, MAX_USER_CORRECTION_SESSIONS);
+  const sessions = await Promise.all(
+    reviewedSessionIds.map((sessionId) =>
+      new AaronDbEdgeSessionRepository(input.env.AARONDB, sessionId).getSession()
+    )
+  );
+  const correctionMatches = sessions.flatMap((session) =>
+    session ? extractUserCorrectionMatches(session) : []
+  );
+  const repeatedGroups = groupRepeatedUserCorrections(correctionMatches);
+  const correctionSignals = repeatedGroups.map(({ pattern, matches }) =>
+    buildUserCorrectionSignal(pattern, matches)
+  );
+  const allProposals = correctionSignals.map((signal) => buildUserCorrectionProposal(signal, timestamp));
+  const matchedCorrectionCount = repeatedGroups.reduce((total, group) => total + group.matches.length, 0);
+  const proposalRepository = new AaronDbEdgeSessionRepository(
+    input.env.AARONDB,
+    IMPROVEMENT_PROPOSAL_SESSION_ID
+  );
+  const existingProposalKeys = getStoredProposalKeys((await proposalRepository.getSession())?.toolEvents ?? []);
+  const freshProposals = allProposals.filter((proposal) => !existingProposalKeys.has(proposal.proposalKey));
+
+  if (freshProposals.length > 0) {
+    await ensureSyntheticSession(proposalRepository, timestamp);
+    await proposalRepository.appendToolEvent({
+      timestamp,
+      toolName: "improvement-proposal-review",
+      summary: `User-correction miner reviewed ${reviewedSessionIds.length} session(s), matched ${matchedCorrectionCount} repeated correction(s), and wrote ${freshProposals.length} structured proposal(s).`,
+      metadata: {
+        cron: input.cron,
+        correctionSignalCount: correctionSignals.length,
+        correctionSignals,
+        generatedProposalCount: freshProposals.length,
+        matchedCorrectionCount,
+        proposals: freshProposals,
+        reviewedSessionCount: reviewedSessionIds.length,
+        reviewedSessionIds,
+        reviewedSignalCount: correctionSignals.length,
+        skippedDuplicateProposalCount: allProposals.length - freshProposals.length,
+        sourceHandId: "user-correction-miner",
+        audit: buildToolAuditRecord({
+          toolId: "improvement-proposal-review",
+          actor: "hand-runtime",
+          scope: "hand",
+          outcome: "succeeded",
+          timestamp,
+          handId: "user-correction-miner",
+          sessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+          detail: `User-correction miner wrote ${freshProposals.length} structured proposal(s) from ${matchedCorrectionCount} repeated correction(s).`,
+          extra: {
+            cron: input.cron,
+            correctionSignalCount: correctionSignals.length,
+            generatedProposalCount: freshProposals.length,
+            matchedCorrectionCount,
+            reviewedSessionCount: reviewedSessionIds.length,
+            skippedDuplicateProposalCount: allProposals.length - freshProposals.length
+          }
+        })
+      }
+    });
+  }
+
+  return {
+    cron: input.cron,
+    proposalSessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+    reviewedSessionIds,
+    correctionSignalCount: correctionSignals.length,
+    correctionSignals,
+    matchedCorrectionCount,
+    generatedProposalCount: freshProposals.length,
+    skippedDuplicateProposalCount: allProposals.length - freshProposals.length
+  };
+}
+
+export async function runScheduledImprovementShadowEvaluation(input: {
+  env: Pick<Env, "AARONDB">;
+  cron: string;
+  timestamp?: string;
+}): Promise<ImprovementShadowEvaluationResult> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const proposalRepository = new AaronDbEdgeSessionRepository(
+    input.env.AARONDB,
+    IMPROVEMENT_PROPOSAL_SESSION_ID
+  );
+  const proposalState = await readImprovementProposalState({ env: input.env });
+  const proposalsToEvaluate = proposalState.proposals.filter((proposal) => proposal.status === "proposed");
+
+  if (proposalsToEvaluate.length > 0) {
+    await ensureSyntheticSession(proposalRepository, timestamp);
+    const evaluatedProposals = proposalsToEvaluate.map((proposal) =>
+      completeShadowEvaluation(markShadowEvaluationStarted(proposal, timestamp), timestamp)
+    );
+
+    await proposalRepository.appendToolEvent({
+      timestamp,
+      toolName: "improvement-shadow-evaluation",
+      summary: `Improvement Hand completed bounded shadow evaluation for ${evaluatedProposals.length} proposal(s); ${evaluatedProposals.length} now await protected approval.`,
+      metadata: {
+        cron: input.cron,
+        evaluatedProposalCount: evaluatedProposals.length,
+        awaitingApprovalCount: evaluatedProposals.length,
+        evaluationMode: "bounded-metadata-shadow",
+        proposals: evaluatedProposals,
+        audit: buildToolAuditRecord({
+          toolId: "improvement-shadow-evaluation",
+          actor: "hand-runtime",
+          scope: "hand",
+          outcome: "succeeded",
+          timestamp,
+          handId: "improvement-hand",
+          sessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+          detail: `Improvement Hand completed bounded shadow evaluation for ${evaluatedProposals.length} proposal(s).`,
+          extra: {
+            cron: input.cron,
+            evaluatedProposalCount: evaluatedProposals.length,
+            awaitingApprovalCount: evaluatedProposals.length,
+            evaluationMode: "bounded-metadata-shadow"
+          }
+        })
+      }
+    });
+  }
+
+  return {
+    cron: input.cron,
+    proposalSessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+    evaluatedProposalCount: proposalsToEvaluate.length,
+    awaitingApprovalCount: proposalsToEvaluate.length
+  };
+}
+
+export async function readImprovementProposalState(input: {
+  env: Pick<Env, "AARONDB">;
+}): Promise<{
+  proposalSessionId: string;
+  proposals: ImprovementProposalRecord[];
+}> {
+  const proposalSession = await new AaronDbEdgeSessionRepository(
+    input.env.AARONDB,
+    IMPROVEMENT_PROPOSAL_SESSION_ID
+  ).getSession();
+  const proposalMap = new Map<string, ImprovementProposalRecord>();
+
+  for (const event of proposalSession?.toolEvents ?? []) {
+    for (const proposal of toImprovementProposalRecords(event.metadata?.proposals)) {
+      proposalMap.set(proposal.proposalKey, proposal);
+    }
+  }
+
+  return {
+    proposalSessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+    proposals: [...proposalMap.values()].sort((left, right) => left.proposalKey.localeCompare(right.proposalKey))
+  };
+}
+
+export async function recordImprovementLifecycleAction(input: {
+  env: Pick<Env, "AARONDB">;
+  proposalKey: string;
+  action: Extract<ImprovementLifecycleAction, "pause" | "approve" | "promote" | "reject" | "rollback">;
+  timestamp?: string;
+}): Promise<ImprovementProposalRecord> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const proposalRepository = new AaronDbEdgeSessionRepository(
+    input.env.AARONDB,
+    IMPROVEMENT_PROPOSAL_SESSION_ID
+  );
+  const proposalState = await readImprovementProposalState({ env: input.env });
+  const currentProposal = proposalState.proposals.find((proposal) => proposal.proposalKey === input.proposalKey);
+
+  if (!currentProposal) {
+    throw new Error(`Improvement proposal ${input.proposalKey} was not found.`);
+  }
+
+  const updatedProposal = applyLifecycleAction(currentProposal, input.action, timestamp);
+  await ensureSyntheticSession(proposalRepository, timestamp);
+  const summary =
+    updatedProposal.lifecycleHistory[updatedProposal.lifecycleHistory.length - 1]?.summary ??
+    `Improvement lifecycle ${input.action} recorded for ${currentProposal.proposalKey}.`;
+
+  await proposalRepository.appendToolEvent({
+    timestamp,
+    toolName: "improvement-candidate-review",
+    summary,
+    metadata: {
+      action: input.action,
+      proposalKey: input.proposalKey,
+      proposals: [updatedProposal],
+      audit: buildToolAuditRecord({
+        toolId: "improvement-candidate-review",
+        actor: "operator-route",
+        scope: "operator",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+        detail: summary,
+        extra: {
+          action: input.action,
+          proposalKey: input.proposalKey,
+          status: updatedProposal.status
+        }
+      })
+    }
+  });
+
+  return updatedProposal;
+}
+
+export interface StoredReflectionArtifact {
   reflectionSessionId: string;
   sourceSessionId: string;
   sourceLastTx: number;
@@ -394,6 +781,19 @@ async function listRecentReflectionSessionIds(database: D1Database, limit: numbe
     .sort((left, right) => right[1].localeCompare(left[1]))
     .slice(0, limit)
     .map(([sessionId]) => sessionId);
+}
+
+export async function listRecentStoredReflectionArtifacts(
+  database: D1Database,
+  limit = MAX_MAINTENANCE_SESSIONS
+): Promise<StoredReflectionArtifact[]> {
+  const reflectionSessionIds = await listRecentReflectionSessionIds(database, limit);
+
+  return (
+    await Promise.all(
+      reflectionSessionIds.map((reflectionSessionId) => readStoredReflectionArtifact(database, reflectionSessionId))
+    )
+  ).filter((artifact): artifact is StoredReflectionArtifact => artifact !== null);
 }
 
 async function ensureSyntheticSession(
@@ -570,123 +970,155 @@ function buildImprovementSignals(
 }
 
 function buildImprovementCandidates(
-  signals: ImprovementSignalRecord[]
+  signals: ImprovementSignalRecord[],
+  timestamp: string
 ): ImprovementCandidateRecord[] {
   return signals.map((signal) => {
     switch (signal.signalKey) {
       case "evidence-intent-without-tool-trace":
-        return {
-          candidateKey: "add-tool-backed-verification-step",
-          status: "proposed",
-          summary: "Add a tool-backed verification checkpoint before final answers when the turn asks for proof or evidence.",
-          problemStatement: signal.summary,
-          proposedAction:
-            "Add a tool-backed verification checkpoint before final answers when the turn asks for proof or evidence.",
-          expectedBenefit: "Makes proof-oriented answers more trustworthy by persisting an explicit evidence trail.",
-          riskLevel: "medium",
-          verificationPlan:
-            "Verify future runs persist a tool trace and reduce recurrence of this signal for similar prompts.",
-          derivedFromSignalKeys: [signal.signalKey],
-          evidence: signal.evidence,
-          risk: {
-            level: "medium",
-            summary: "Adding a verification checkpoint increases latency slightly, but it lowers the chance of unsupported reasoning."
+        return buildImprovementCandidateRecord(
+          {
+            candidateKey: "add-tool-backed-verification-step",
+            summary:
+              "Add a tool-backed verification checkpoint before final answers when the turn asks for proof or evidence.",
+            problemStatement: signal.summary,
+            proposedAction:
+              "Add a tool-backed verification checkpoint before final answers when the turn asks for proof or evidence.",
+            expectedBenefit:
+              "Makes proof-oriented answers more trustworthy by persisting an explicit evidence trail.",
+            riskLevel: "medium",
+            verificationPlan:
+              "Verify future runs persist a tool trace and reduce recurrence of this signal for similar prompts.",
+            derivedFromSignalKeys: [signal.signalKey],
+            evidence: signal.evidence,
+            risk: {
+              level: "medium",
+              summary:
+                "Adding a verification checkpoint increases latency slightly, but it lowers the chance of unsupported reasoning."
+            },
+            verification: {
+              status: "pending",
+              summary:
+                "Verify future runs persist a tool trace and reduce recurrence of this signal for similar prompts."
+            }
           },
-          verification: {
-            status: "pending",
-            summary: "Verify future runs persist a tool trace and reduce recurrence of this signal for similar prompts."
-          }
-        };
+          timestamp
+        );
       case "open-user-questions":
-        return {
-          candidateKey: "add-explicit-follow-up-closure",
-          status: "proposed",
-          summary: "Add an explicit closure or deferred-follow-up marker when a user question remains unresolved in session history.",
-          problemStatement: signal.summary,
-          proposedAction:
-            "Add an explicit closure or deferred-follow-up marker when a user question remains unresolved in session history.",
-          expectedBenefit: "Prevents unresolved questions from silently accumulating and degrading operator trust.",
-          riskLevel: "low",
-          verificationPlan:
-            "Verify later automation can distinguish resolved, deferred, and still-open questions from persisted metadata.",
-          derivedFromSignalKeys: [signal.signalKey],
-          evidence: signal.evidence,
-          risk: {
-            level: "low",
-            summary: "Closure metadata is low risk, but it needs a consistent status vocabulary before broader automation reads it."
+        return buildImprovementCandidateRecord(
+          {
+            candidateKey: "add-explicit-follow-up-closure",
+            summary:
+              "Add an explicit closure or deferred-follow-up marker when a user question remains unresolved in session history.",
+            problemStatement: signal.summary,
+            proposedAction:
+              "Add an explicit closure or deferred-follow-up marker when a user question remains unresolved in session history.",
+            expectedBenefit:
+              "Prevents unresolved questions from silently accumulating and degrading operator trust.",
+            riskLevel: "low",
+            verificationPlan:
+              "Verify later automation can distinguish resolved, deferred, and still-open questions from persisted metadata.",
+            derivedFromSignalKeys: [signal.signalKey],
+            evidence: signal.evidence,
+            risk: {
+              level: "low",
+              summary:
+                "Closure metadata is low risk, but it needs a consistent status vocabulary before broader automation reads it."
+            },
+            verification: {
+              status: "pending",
+              summary:
+                "Verify later automation can distinguish resolved, deferred, and still-open questions from persisted metadata."
+            }
           },
-          verification: {
-            status: "pending",
-            summary: "Verify later automation can distinguish resolved, deferred, and still-open questions from persisted metadata."
-          }
-        };
+          timestamp
+        );
       case "degraded-tool-audit":
-        return {
-          candidateKey: "stabilize-degraded-tool-path",
-          status: "proposed",
-          summary: "Stabilize or clearly gate the degraded tool path surfaced by persisted audit failures.",
-          problemStatement: signal.summary,
-          proposedAction: "Stabilize or clearly gate the degraded tool path surfaced by persisted audit failures.",
-          expectedBenefit: "Makes degraded tool behavior explicit and lowers the chance of hidden runtime erosion.",
-          riskLevel: "medium",
-          verificationPlan:
-            "Verify later runs either remove the degraded audit or intentionally preserve it with an explicit blocked policy reason.",
-          derivedFromSignalKeys: [signal.signalKey],
-          evidence: signal.evidence,
-          risk: {
-            level: "medium",
-            summary: "Repairing a degraded tool path may touch capability gates, so verification should stay narrow and operator-visible."
+        return buildImprovementCandidateRecord(
+          {
+            candidateKey: "stabilize-degraded-tool-path",
+            summary: "Stabilize or clearly gate the degraded tool path surfaced by persisted audit failures.",
+            problemStatement: signal.summary,
+            proposedAction:
+              "Stabilize or clearly gate the degraded tool path surfaced by persisted audit failures.",
+            expectedBenefit:
+              "Makes degraded tool behavior explicit and lowers the chance of hidden runtime erosion.",
+            riskLevel: "medium",
+            verificationPlan:
+              "Verify later runs either remove the degraded audit or intentionally preserve it with an explicit blocked policy reason.",
+            derivedFromSignalKeys: [signal.signalKey],
+            evidence: signal.evidence,
+            risk: {
+              level: "medium",
+              summary:
+                "Repairing a degraded tool path may touch capability gates, so verification should stay narrow and operator-visible."
+            },
+            verification: {
+              status: "pending",
+              summary:
+                "Verify later runs either remove the degraded audit or intentionally preserve it with an explicit blocked policy reason."
+            }
           },
-          verification: {
-            status: "pending",
-            summary: "Verify later runs either remove the degraded audit or intentionally preserve it with an explicit blocked policy reason."
-          }
-        };
+          timestamp
+        );
       case "assistant-fallback-observed":
-        return {
-          candidateKey: "track-and-reduce-fallback-frequency",
-          status: "proposed",
-          summary: "Track fallback frequency and reduce avoidable fallback use on the preferred assistant route.",
-          problemStatement: signal.summary,
-          proposedAction: "Track fallback frequency and reduce avoidable fallback use on the preferred assistant route.",
-          expectedBenefit: "Improves confidence in the preferred assistant path while preserving deterministic fallback continuity.",
-          riskLevel: "medium",
-          verificationPlan:
-            "Verify the preferred route succeeds on later runs without regressing deterministic fallback continuity.",
-          derivedFromSignalKeys: [signal.signalKey],
-          evidence: signal.evidence,
-          risk: {
-            level: "medium",
-            summary: "Route recovery work can destabilize the happy path unless it stays additive and preserves deterministic fallback behavior."
+        return buildImprovementCandidateRecord(
+          {
+            candidateKey: "track-and-reduce-fallback-frequency",
+            summary:
+              "Track fallback frequency and reduce avoidable fallback use on the preferred assistant route.",
+            problemStatement: signal.summary,
+            proposedAction:
+              "Track fallback frequency and reduce avoidable fallback use on the preferred assistant route.",
+            expectedBenefit:
+              "Improves confidence in the preferred assistant path while preserving deterministic fallback continuity.",
+            riskLevel: "medium",
+            verificationPlan:
+              "Verify the preferred route succeeds on later runs without regressing deterministic fallback continuity.",
+            derivedFromSignalKeys: [signal.signalKey],
+            evidence: signal.evidence,
+            risk: {
+              level: "medium",
+              summary:
+                "Route recovery work can destabilize the happy path unless it stays additive and preserves deterministic fallback behavior."
+            },
+            verification: {
+              status: "pending",
+              summary:
+                "Verify the preferred route succeeds on later runs without regressing deterministic fallback continuity."
+            }
           },
-          verification: {
-            status: "pending",
-            summary: "Verify the preferred route succeeds on later runs without regressing deterministic fallback continuity."
-          }
-        };
+          timestamp
+        );
       default:
-        return {
-          candidateKey: "promote-evidence-backed-pattern",
-          status: "proposed",
-          summary: "Promote the current evidence-backed reasoning pattern into a reusable skill/maintenance prompt contract.",
-          problemStatement: signal.summary,
-          proposedAction:
-            "Promote the current evidence-backed reasoning pattern into a reusable skill/maintenance prompt contract.",
-          expectedBenefit: "Captures a successful evidence-backed behavior in a reusable form without mutating live production behavior directly.",
-          riskLevel: "low",
-          verificationPlan:
-            "Verify the promoted contract still preserves the existing chat, hands, and Telegram behavior when idle.",
-          derivedFromSignalKeys: [signal.signalKey],
-          evidence: signal.evidence,
-          risk: {
-            level: "low",
-            summary: "Standardizing a good pattern is low risk if future waves preserve the current chat and maintenance APIs."
+        return buildImprovementCandidateRecord(
+          {
+            candidateKey: "promote-evidence-backed-pattern",
+            summary:
+              "Promote the current evidence-backed reasoning pattern into a reusable skill/maintenance prompt contract.",
+            problemStatement: signal.summary,
+            proposedAction:
+              "Promote the current evidence-backed reasoning pattern into a reusable skill/maintenance prompt contract.",
+            expectedBenefit:
+              "Captures a successful evidence-backed behavior in a reusable form without mutating live production behavior directly.",
+            riskLevel: "low",
+            verificationPlan:
+              "Verify the promoted contract still preserves the existing chat, hands, and Telegram behavior when idle.",
+            derivedFromSignalKeys: [signal.signalKey],
+            evidence: signal.evidence,
+            risk: {
+              level: "low",
+              summary:
+                "Standardizing a good pattern is low risk if future waves preserve the current chat and maintenance APIs."
+            },
+            verification: {
+              status: "pending",
+              summary:
+                "Verify the promoted contract still preserves the existing chat, hands, and Telegram behavior when idle."
+            }
           },
-          verification: {
-            status: "pending",
-            summary: "Verify the promoted contract still preserves the existing chat, hands, and Telegram behavior when idle."
-          }
-        };
+          timestamp
+        );
     }
   });
 }
@@ -761,9 +1193,6 @@ async function readStoredReflectionArtifact(
 
   const metadata = asJsonObject(latestReflection.metadata);
   const improvementSignals = toImprovementSignalRecords(metadata?.improvementSignals);
-  if (improvementSignals.length === 0) {
-    return null;
-  }
 
   return {
     reflectionSessionId,
@@ -776,14 +1205,496 @@ async function readStoredReflectionArtifact(
   };
 }
 
-function buildImprovementProposals(artifact: StoredReflectionArtifact): ImprovementProposalRecord[] {
-  return buildImprovementCandidates(artifact.improvementSignals).map((candidate) => ({
+function buildImprovementProposals(
+  artifact: StoredReflectionArtifact,
+  timestamp: string
+): ImprovementProposalRecord[] {
+  return buildImprovementCandidates(artifact.improvementSignals, timestamp).map((candidate) => ({
     ...candidate,
     proposalKey: `${artifact.reflectionSessionId}@${artifact.sourceLastTx}:${candidate.candidateKey}`,
     sourceReflectionSessionId: artifact.reflectionSessionId,
     sourceSessionId: artifact.sourceSessionId,
     sourceLastTx: artifact.sourceLastTx
   }));
+}
+
+function extractUserCorrectionMatches(session: SessionRecord): UserCorrectionMatch[] {
+  const matches: UserCorrectionMatch[] = [];
+
+  for (let index = 1; index < session.messages.length; index += 1) {
+    const previousMessage = session.messages[index - 1];
+    const currentMessage = session.messages[index];
+
+    if (previousMessage.role !== "assistant" || currentMessage.role !== "user") {
+      continue;
+    }
+
+    const pattern = classifyUserCorrection(currentMessage.content);
+    if (!pattern) {
+      continue;
+    }
+
+    matches.push({
+      sessionId: session.id,
+      assistantMessage: previousMessage,
+      correctionMessage: currentMessage,
+      pattern
+    });
+  }
+
+  return matches;
+}
+
+function classifyUserCorrection(content: string): UserCorrectionPatternDefinition | null {
+  const normalized = content.toLowerCase();
+  const terms = tokenize(content);
+
+  if (terms.some((term) => ["evidence", "proof", "verify", "cite", "source", "sources"].includes(term))) {
+    return getUserCorrectionPattern("evidence-contract");
+  }
+
+  if (terms.some((term) => ["inspect", "search", "trace", "tool", "tools", "logs", "check"].includes(term))) {
+    return getUserCorrectionPattern("tool-backed-investigation");
+  }
+
+  if (
+    normalized.startsWith("no") ||
+    normalized.includes("actually") ||
+    normalized.includes("i meant") ||
+    normalized.includes("instead") ||
+    normalized.includes("rather than") ||
+    normalized.includes("i said") ||
+    normalized.includes("please answer")
+  ) {
+    return getUserCorrectionPattern("instruction-restatement");
+  }
+
+  return null;
+}
+
+function getUserCorrectionPattern(
+  patternKey: UserCorrectionPatternKey
+): UserCorrectionPatternDefinition | null {
+  return USER_CORRECTION_PATTERNS.find((pattern) => pattern.patternKey === patternKey) ?? null;
+}
+
+function groupRepeatedUserCorrections(matches: UserCorrectionMatch[]) {
+  const grouped = new Map<UserCorrectionPatternKey, UserCorrectionMatch[]>();
+
+  for (const match of matches) {
+    const current = grouped.get(match.pattern.patternKey) ?? [];
+    current.push(match);
+    grouped.set(match.pattern.patternKey, current);
+  }
+
+  return [...grouped.entries()]
+    .map(([patternKey, groupedMatches]) => ({
+      pattern: getUserCorrectionPattern(patternKey),
+      matches: groupedMatches,
+      distinctSessionCount: new Set(groupedMatches.map((match) => match.sessionId)).size
+    }))
+    .filter(
+      (
+        entry
+      ): entry is {
+        pattern: UserCorrectionPatternDefinition;
+        matches: UserCorrectionMatch[];
+        distinctSessionCount: number;
+      } =>
+        entry.pattern !== null &&
+        entry.matches.length >= MIN_REPEATED_USER_CORRECTIONS &&
+        entry.distinctSessionCount >= MIN_REPEATED_USER_CORRECTIONS
+    );
+}
+
+function buildUserCorrectionSignal(
+  pattern: UserCorrectionPatternDefinition,
+  matches: UserCorrectionMatch[]
+): ImprovementSignalRecord {
+  const matchedSessionIds = [...new Set(matches.map((match) => match.sessionId))];
+  const evidence = [
+    buildMetricEvidence(
+      `repeatedCorrectionCount=${matches.length}; matchedSessionCount=${matchedSessionIds.length}.`
+    ),
+    ...matches.slice(0, MAX_USER_CORRECTION_EVIDENCE).flatMap((match) => [
+      buildMessageEvidence(
+        match.assistantMessage,
+        "Assistant response that immediately preceded the stored user correction."
+      ),
+      buildMessageEvidence(match.correctionMessage, "User follow-up that corrected the prior assistant response.")
+    ])
+  ];
+
+  return {
+    signalKey: pattern.signalKey,
+    category: pattern.category,
+    status: "active",
+    summary: `${pattern.signalSummary} Matched ${matches.length} correction(s) across ${matchedSessionIds.length} session(s).`,
+    evidence,
+    risk: {
+      level: pattern.riskLevel,
+      summary: pattern.riskSummary
+    },
+    verification: {
+      status: "pending",
+      summary: pattern.verificationPlan
+    },
+    matchedSessionIds,
+    repeatedCorrectionCount: matches.length
+  };
+}
+
+function buildUserCorrectionProposal(
+  signal: ImprovementSignalRecord,
+  timestamp: string
+): ImprovementProposalRecord {
+  const pattern = USER_CORRECTION_PATTERNS.find((candidate) => candidate.signalKey === signal.signalKey);
+
+  if (!pattern) {
+    return {
+      ...buildImprovementCandidateRecord(
+        {
+          candidateKey: "review-user-correction-pattern",
+          summary: "Review the repeated user-correction pattern before considering any runtime change.",
+          problemStatement: signal.summary,
+          proposedAction: "Review the repeated user-correction pattern before considering any runtime change.",
+          expectedBenefit: "Keeps user/operator corrections visible in the structured improvement queue.",
+          riskLevel: "low",
+          verificationPlan:
+            "Verify any later action preserves the current chat, hands, and Telegram behavior when the change is idle or disabled.",
+          derivedFromSignalKeys: [signal.signalKey],
+          evidence: signal.evidence,
+          risk: signal.risk,
+          verification: signal.verification
+        },
+        timestamp
+      ),
+      proposalKey: `user-correction-miner:${signal.signalKey}:review`,
+      sourceReflectionSessionId: "improvement:user-correction-miner",
+      sourceSessionId: "user-correction-miner",
+      sourceLastTx: 0,
+      sourceHandId: "user-correction-miner"
+    };
+  }
+
+  return {
+    ...buildImprovementCandidateRecord(
+      {
+        candidateKey: pattern.candidateKey,
+        summary: pattern.candidateSummary,
+        problemStatement: signal.summary,
+        proposedAction: pattern.proposedAction,
+        expectedBenefit: pattern.expectedBenefit,
+        riskLevel: pattern.riskLevel,
+        verificationPlan: pattern.verificationPlan,
+        derivedFromSignalKeys: [signal.signalKey],
+        evidence: signal.evidence,
+        risk: {
+          level: pattern.riskLevel,
+          summary: pattern.riskSummary
+        },
+        verification: {
+          status: "pending",
+          summary: pattern.verificationPlan
+        }
+      },
+      timestamp
+    ),
+    proposalKey: `user-correction-miner:${pattern.patternKey}:${pattern.candidateKey}`,
+    sourceReflectionSessionId: `improvement:user-correction:${pattern.patternKey}`,
+    sourceSessionId: `user-correction-pattern:${pattern.patternKey}`,
+    sourceLastTx: 0,
+    sourceHandId: "user-correction-miner"
+  };
+}
+
+interface ImprovementCandidateSeed {
+  candidateKey: string;
+  summary: string;
+  problemStatement: string;
+  proposedAction: string;
+  expectedBenefit: string;
+  riskLevel: ImprovementRiskLevel;
+  verificationPlan: string;
+  derivedFromSignalKeys: string[];
+  evidence: ImprovementEvidenceRecord[];
+  risk: ImprovementRiskRecord;
+  verification: ImprovementVerificationRecord;
+}
+
+export function buildImprovementCandidateRecord(
+  input: ImprovementCandidateSeed,
+  timestamp: string
+): ImprovementCandidateRecord {
+  return {
+    ...input,
+    status: "proposed",
+    shadowEvaluation: {
+      mode: "bounded-metadata-shadow",
+      status: "pending",
+      verdict: "pending",
+      baselineSummary: input.problemStatement,
+      candidateSummary: input.proposedAction,
+      comparisonSummary:
+        "Pending bounded shadow evaluation against persisted baseline evidence before any protected approval or promotion marker is allowed.",
+      baselineEvidenceCount: input.evidence.length,
+      baselineRiskLevel: input.risk.level,
+      baselineVerificationStatus: input.verification.status,
+      candidateRiskLevel: input.riskLevel,
+      startedAt: null,
+      completedAt: null
+    },
+    approval: {
+      requiresProtectedApproval: true,
+      status: "pending",
+      approvedAt: null,
+      rejectedAt: null,
+      summary: "Protected operator approval is required before any promotion marker can be recorded."
+    },
+    promotion: {
+      status: "not-promoted",
+      promotedAt: null,
+      rolledBackAt: null,
+      productionMutation: "manual-only",
+      liveMutationApplied: false,
+      summary: "No production mutation is applied automatically; this first pass records lifecycle markers only."
+    },
+    lifecycleHistory: [
+      buildLifecycleHistoryEntry({
+        action: "propose",
+        actor: "hand-runtime",
+        fromStatus: "none",
+        toStatus: "proposed",
+        timestamp,
+        summary: `Structured improvement proposal ${input.candidateKey} was recorded for bounded review.`
+      })
+    ]
+  };
+}
+
+function markShadowEvaluationStarted(
+  proposal: ImprovementProposalRecord,
+  timestamp: string
+): ImprovementProposalRecord {
+  return {
+    ...proposal,
+    status: "shadowing",
+    shadowEvaluation: {
+      ...proposal.shadowEvaluation,
+      status: "pending",
+      verdict: "pending",
+      startedAt: timestamp
+    },
+    lifecycleHistory: [
+      ...proposal.lifecycleHistory,
+      buildLifecycleHistoryEntry({
+        action: "start-shadow",
+        actor: "hand-runtime",
+        fromStatus: proposal.status,
+        toStatus: "shadowing",
+        timestamp,
+        summary: `Bounded shadow evaluation started for ${proposal.proposalKey}.`
+      })
+    ]
+  };
+}
+
+function completeShadowEvaluation(
+  proposal: ImprovementProposalRecord,
+  timestamp: string
+): ImprovementProposalRecord {
+  return {
+    ...proposal,
+    status: "awaiting-approval",
+    shadowEvaluation: {
+      ...proposal.shadowEvaluation,
+      status: "completed",
+      verdict: "awaiting-approval",
+      comparisonSummary:
+        "Compared the persisted baseline evidence against the bounded candidate plan in metadata-only shadow mode. The candidate may proceed to protected approval review, but no live production mutation was applied.",
+      completedAt: timestamp
+    },
+    approval: {
+      ...proposal.approval,
+      status: "pending",
+      summary: "Shadow evaluation completed. Protected operator approval is still required before promotion."
+    },
+    lifecycleHistory: [
+      ...proposal.lifecycleHistory,
+      buildLifecycleHistoryEntry({
+        action: "complete-shadow",
+        actor: "hand-runtime",
+        fromStatus: proposal.status,
+        toStatus: "awaiting-approval",
+        timestamp,
+        summary: `Bounded shadow evaluation completed for ${proposal.proposalKey}; candidate now awaits protected approval.`
+      })
+    ]
+  };
+}
+
+function applyLifecycleAction(
+  proposal: ImprovementProposalRecord,
+  action: Extract<ImprovementLifecycleAction, "pause" | "approve" | "promote" | "reject" | "rollback">,
+  timestamp: string
+): ImprovementProposalRecord {
+  switch (action) {
+    case "pause": {
+      if (proposal.status !== "awaiting-approval") {
+        throw new Error(`Improvement proposal ${proposal.proposalKey} must reach protected review before it can be paused.`);
+      }
+
+      return {
+        ...proposal,
+        status: "paused",
+        approval: {
+          ...proposal.approval,
+          status: "pending",
+          summary: "Protected operator pause was recorded. Candidate remains on hold pending approval or rejection."
+        },
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: "paused",
+            timestamp,
+            summary: `Pause recorded for ${proposal.proposalKey}; candidate remains on hold pending operator review.`
+          })
+        ]
+      };
+    }
+    case "approve": {
+      if (proposal.status !== "awaiting-approval" && proposal.status !== "paused") {
+        throw new Error(
+          `Improvement proposal ${proposal.proposalKey} must complete shadow evaluation and await review before approval.`
+        );
+      }
+
+      return {
+        ...proposal,
+        status: "approved",
+        approval: {
+          ...proposal.approval,
+          status: "approved",
+          approvedAt: timestamp,
+          summary: "Protected operator approval was recorded for this candidate."
+        },
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: "approved",
+            timestamp,
+            summary: `Protected approval recorded for ${proposal.proposalKey}.`
+          })
+        ]
+      };
+    }
+    case "promote": {
+      if (proposal.status !== "approved") {
+        throw new Error(`Improvement proposal ${proposal.proposalKey} must be approved before promotion.`);
+      }
+
+      return {
+        ...proposal,
+        status: "promoted",
+        promotion: {
+          ...proposal.promotion,
+          status: "promoted",
+          promotedAt: timestamp,
+          summary:
+            "Promotion marker recorded after protected approval. Live production mutation remains manual-only and was not applied automatically."
+        },
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: "promoted",
+            timestamp,
+            summary: `Promotion marker recorded for ${proposal.proposalKey}; live production behavior remains unchanged by default.`
+          })
+        ]
+      };
+    }
+    case "reject": {
+      if (proposal.status === "promoted" || proposal.status === "rolled-back" || proposal.status === "rejected") {
+        throw new Error(`Improvement proposal ${proposal.proposalKey} cannot be rejected from status ${proposal.status}.`);
+      }
+
+      return {
+        ...proposal,
+        status: "rejected",
+        approval: {
+          ...proposal.approval,
+          status: "rejected",
+          rejectedAt: timestamp,
+          summary: "Protected operator rejection was recorded for this candidate."
+        },
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: "rejected",
+            timestamp,
+            summary: `Rejection recorded for ${proposal.proposalKey}; candidate will not be promoted.`
+          })
+        ]
+      };
+    }
+    case "rollback": {
+      if (proposal.status !== "promoted") {
+        throw new Error(`Improvement proposal ${proposal.proposalKey} must be promoted before rollback.`);
+      }
+
+      return {
+        ...proposal,
+        status: "rolled-back",
+        promotion: {
+          ...proposal.promotion,
+          status: "rolled-back",
+          rolledBackAt: timestamp,
+          summary: "Rollback marker recorded for this candidate. No automatic live mutation had been applied."
+        },
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: "rolled-back",
+            timestamp,
+            summary: `Rollback marker recorded for ${proposal.proposalKey}.`
+          })
+        ]
+      };
+    }
+  }
+}
+
+function buildLifecycleHistoryEntry(input: {
+  action: ImprovementLifecycleAction;
+  actor: ImprovementLifecycleEntryRecord["actor"];
+  fromStatus: ImprovementLifecycleEntryRecord["fromStatus"];
+  toStatus: ImprovementCandidateStatus;
+  timestamp: string;
+  summary: string;
+}): ImprovementLifecycleEntryRecord {
+  return {
+    action: input.action,
+    actor: input.actor,
+    fromStatus: input.fromStatus,
+    toStatus: input.toStatus,
+    timestamp: input.timestamp,
+    summary: input.summary
+  };
 }
 
 function toImprovementSignalRecords(value: unknown): ImprovementSignalRecord[] {
@@ -797,6 +1708,234 @@ function toImprovementSignalRecords(value: unknown): ImprovementSignalRecord[] {
       (entry): entry is ImprovementSignalRecord =>
         entry !== null && typeof entry.signalKey === "string" && typeof entry.summary === "string"
     );
+}
+
+function toImprovementProposalRecords(value: unknown): ImprovementProposalRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => normalizeImprovementProposalRecord(asJsonObject(entry)))
+    .filter((entry): entry is ImprovementProposalRecord => entry !== null);
+}
+
+function normalizeImprovementProposalRecord(entry: JsonObject | null): ImprovementProposalRecord | null {
+  if (
+    !entry ||
+    typeof entry.proposalKey !== "string" ||
+    typeof entry.candidateKey !== "string" ||
+    typeof entry.summary !== "string" ||
+    typeof entry.problemStatement !== "string" ||
+    typeof entry.proposedAction !== "string" ||
+    typeof entry.expectedBenefit !== "string" ||
+    typeof entry.verificationPlan !== "string" ||
+    typeof entry.sourceReflectionSessionId !== "string" ||
+    typeof entry.sourceSessionId !== "string" ||
+    typeof entry.sourceLastTx !== "number"
+  ) {
+    return null;
+  }
+
+  const riskLevel = toImprovementRiskLevel(entry.riskLevel) ?? "medium";
+  const risk = asJsonObject(entry.risk);
+  const verification = asJsonObject(entry.verification);
+  const status = toImprovementCandidateStatus(entry.status) ?? "proposed";
+
+  return {
+    proposalKey: entry.proposalKey,
+    candidateKey: entry.candidateKey,
+    status,
+    summary: entry.summary,
+    problemStatement: entry.problemStatement,
+    proposedAction: entry.proposedAction,
+    expectedBenefit: entry.expectedBenefit,
+    riskLevel,
+    verificationPlan: entry.verificationPlan,
+    derivedFromSignalKeys: toStringArray(entry.derivedFromSignalKeys),
+    evidence: toImprovementEvidenceRecords(entry.evidence),
+    risk: {
+      level: toImprovementRiskLevel(risk?.level) ?? riskLevel,
+      summary: typeof risk?.summary === "string" ? risk.summary : `Candidate risk recorded as ${riskLevel}.`
+    },
+    verification: {
+      status: toImprovementVerificationStatus(verification?.status) ?? "pending",
+      summary:
+        typeof verification?.summary === "string"
+          ? verification.summary
+          : "Verification remains pending until bounded shadow evaluation and protected operator review finish."
+    },
+    sourceReflectionSessionId: entry.sourceReflectionSessionId,
+    sourceSessionId: entry.sourceSessionId,
+    sourceLastTx: entry.sourceLastTx,
+    shadowEvaluation: normalizeShadowEvaluation(asJsonObject(entry.shadowEvaluation), entry),
+    approval: normalizeApproval(asJsonObject(entry.approval)),
+    promotion: normalizePromotion(asJsonObject(entry.promotion)),
+    lifecycleHistory: normalizeLifecycleHistory(entry.lifecycleHistory, status, entry.candidateKey)
+  };
+}
+
+function normalizeShadowEvaluation(
+  value: JsonObject | null,
+  proposal: JsonObject
+): ImprovementShadowEvaluationRecord {
+  const baselineRiskLevel =
+    toImprovementRiskLevel(asJsonObject(proposal.risk)?.level) ?? toImprovementRiskLevel(proposal.riskLevel) ?? "medium";
+  const candidateRiskLevel = toImprovementRiskLevel(proposal.riskLevel) ?? baselineRiskLevel;
+
+  return {
+    mode: "bounded-metadata-shadow",
+    status: value?.status === "completed" ? "completed" : "pending",
+    verdict: value?.verdict === "awaiting-approval" ? "awaiting-approval" : "pending",
+    baselineSummary:
+      typeof value?.baselineSummary === "string"
+        ? value.baselineSummary
+        : typeof proposal.problemStatement === "string"
+          ? proposal.problemStatement
+          : "Persisted baseline evidence will be compared during bounded shadow evaluation.",
+    candidateSummary:
+      typeof value?.candidateSummary === "string"
+        ? value.candidateSummary
+        : typeof proposal.proposedAction === "string"
+          ? proposal.proposedAction
+          : "Candidate plan pending bounded shadow evaluation.",
+    comparisonSummary:
+      typeof value?.comparisonSummary === "string"
+        ? value.comparisonSummary
+        : "Pending bounded shadow evaluation against persisted baseline evidence before any promotion marker is allowed.",
+    baselineEvidenceCount:
+      typeof value?.baselineEvidenceCount === "number"
+        ? value.baselineEvidenceCount
+        : Array.isArray(proposal.evidence)
+          ? proposal.evidence.length
+          : 0,
+    baselineRiskLevel,
+    baselineVerificationStatus:
+      toImprovementVerificationStatus(value?.baselineVerificationStatus) ??
+      toImprovementVerificationStatus(asJsonObject(proposal.verification)?.status) ??
+      "pending",
+    candidateRiskLevel,
+    startedAt: typeof value?.startedAt === "string" ? value.startedAt : null,
+    completedAt: typeof value?.completedAt === "string" ? value.completedAt : null
+  };
+}
+
+function normalizeApproval(value: JsonObject | null): ImprovementApprovalRecord {
+  return {
+    requiresProtectedApproval: true,
+    status: value?.status === "approved" || value?.status === "rejected" ? value.status : "pending",
+    approvedAt: typeof value?.approvedAt === "string" ? value.approvedAt : null,
+    rejectedAt: typeof value?.rejectedAt === "string" ? value.rejectedAt : null,
+    summary:
+      typeof value?.summary === "string"
+        ? value.summary
+        : "Protected operator approval is required before any promotion marker can be recorded."
+  };
+}
+
+function normalizePromotion(value: JsonObject | null): ImprovementPromotionRecord {
+  return {
+    status: value?.status === "promoted" || value?.status === "rolled-back" ? value.status : "not-promoted",
+    promotedAt: typeof value?.promotedAt === "string" ? value.promotedAt : null,
+    rolledBackAt: typeof value?.rolledBackAt === "string" ? value.rolledBackAt : null,
+    productionMutation: "manual-only",
+    liveMutationApplied: false,
+    summary:
+      typeof value?.summary === "string"
+        ? value.summary
+        : "No production mutation is applied automatically; this first pass records lifecycle markers only."
+  };
+}
+
+function normalizeLifecycleHistory(
+  value: unknown,
+  status: ImprovementCandidateStatus,
+  candidateKey: string
+): ImprovementLifecycleEntryRecord[] {
+  if (!Array.isArray(value)) {
+    return [
+      buildLifecycleHistoryEntry({
+        action: "propose",
+        actor: "hand-runtime",
+        fromStatus: "none",
+        toStatus: status,
+        timestamp: new Date(0).toISOString(),
+        summary: `Structured improvement proposal ${candidateKey} was recorded.`
+      })
+    ];
+  }
+
+  return value
+    .map((entry) => asJsonObject(entry))
+    .filter((entry): entry is JsonObject => entry !== null)
+    .map((entry) => ({
+      action: toImprovementLifecycleAction(entry.action) ?? "propose",
+      actor: entry.actor === "operator-route" ? "operator-route" : "hand-runtime",
+      fromStatus: toImprovementCandidateStatus(entry.fromStatus) ?? "none",
+      toStatus: toImprovementCandidateStatus(entry.toStatus) ?? status,
+      timestamp: typeof entry.timestamp === "string" ? entry.timestamp : new Date(0).toISOString(),
+      summary: typeof entry.summary === "string" ? entry.summary : `Improvement lifecycle updated for ${candidateKey}.`
+    }));
+}
+
+function toImprovementEvidenceRecords(value: unknown): ImprovementEvidenceRecord[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => asJsonObject(entry))
+    .filter(
+      (entry): entry is ImprovementEvidenceRecord =>
+        entry !== null &&
+        (entry.kind === "audit" || entry.kind === "message" || entry.kind === "tool-event" || entry.kind === "metric") &&
+        typeof entry.summary === "string"
+    )
+    .map((entry) => ({
+      kind: entry.kind,
+      summary: entry.summary,
+      eventId: typeof entry.eventId === "string" ? entry.eventId : null,
+      tx: typeof entry.tx === "number" ? entry.tx : null,
+      excerpt: typeof entry.excerpt === "string" ? entry.excerpt : null
+    }));
+}
+
+function toImprovementRiskLevel(value: unknown): ImprovementRiskLevel | null {
+  return value === "low" || value === "medium" || value === "high" ? value : null;
+}
+
+function toImprovementVerificationStatus(value: unknown): ImprovementVerificationStatus | null {
+  return value === "pending" || value === "verified" || value === "not-needed" ? value : null;
+}
+
+function toImprovementCandidateStatus(value: unknown): ImprovementCandidateStatus | null {
+  return value === "proposed" ||
+    value === "shadowing" ||
+    value === "awaiting-approval" ||
+    value === "paused" ||
+    value === "approved" ||
+    value === "promoted" ||
+    value === "rejected" ||
+    value === "rolled-back"
+    ? value
+    : null;
+}
+
+function toImprovementLifecycleAction(value: unknown): ImprovementLifecycleAction | null {
+  return value === "propose" ||
+    value === "start-shadow" ||
+    value === "complete-shadow" ||
+    value === "pause" ||
+    value === "approve" ||
+    value === "promote" ||
+    value === "reject" ||
+    value === "rollback"
+    ? value
+    : null;
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 function getStoredProposalKeys(toolEvents: ToolEvent[]): Set<string> {
