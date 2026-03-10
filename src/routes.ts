@@ -1,3 +1,5 @@
+import { buildAaronDbEdgeSubstrateStatus } from "./aarondb-edge-substrate";
+
 interface BootstrapStatusOptions {
   authRequired?: boolean;
   defaultModel?: string | null;
@@ -5,6 +7,8 @@ interface BootstrapStatusOptions {
 }
 
 export function buildBootstrapStatus(options: BootstrapStatusOptions = {}) {
+  const substrateStatus = buildAaronDbEdgeSubstrateStatus();
+
   return {
     service: "aaronclaw",
     controlSurface: "browser-first",
@@ -15,13 +19,15 @@ export function buildBootstrapStatus(options: BootstrapStatusOptions = {}) {
     reuseBoundary: "control-surface and gateway patterns only",
     excludedRuntime: "cloudflare sandbox containers",
     memorySource: "aarondb-edge",
+    ...substrateStatus,
     authMode: options.authRequired ? "bearer-token" : "none",
     authBoundary: options.authRequired
       ? "Landing page stays public for token entry; all /api/* routes require Authorization: Bearer <APP_AUTH_TOKEN>."
       : "No bearer token is configured; this personal deployment is effectively open.",
     assistantRuntime: options.hasAiBinding ? "workers-ai" : "deterministic-fallback",
+    assistantBindingStatus: options.hasAiBinding ? "configured" : "missing",
     assistantFallbackBehavior: options.hasAiBinding
-      ? "Workers AI is primary; deterministic fallback is used only if the model call fails or returns empty."
+      ? "Workers AI is configured as the primary runtime; if a model call fails or returns empty, the Worker logs the reason and sends a deterministic fallback reply."
       : "No AI binding is configured; deterministic fallback handles every assistant reply.",
     defaultModel: options.defaultModel ?? null,
     sessionRoutes: [

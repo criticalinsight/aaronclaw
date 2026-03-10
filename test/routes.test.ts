@@ -22,12 +22,19 @@ describe("buildBootstrapStatus", () => {
       buildBootstrapStatus({ authRequired: true, hasAiBinding: true, defaultModel: "model-x" })
     ).toMatchObject({
       baseline: "cloudflare/moltworker",
+      runtimeSubstrate: "criticalinsight/aarondb-edge",
+      runtimeSubstrateStrategy: "vendored-runtime-slice",
       authMode: "bearer-token",
       assistantRuntime: "workers-ai",
+      assistantBindingStatus: "configured",
       authBoundary: expect.stringContaining("/api/* routes require Authorization"),
-      assistantFallbackBehavior: expect.stringContaining("Workers AI is primary"),
+      assistantFallbackBehavior: expect.stringContaining("Worker logs the reason"),
       defaultModel: "model-x",
       memorySource: "aarondb-edge",
+      runtimeSubstrateBindings: expect.arrayContaining([
+        expect.objectContaining({ upstream: "AARONDB_STATE", current: "SESSION_RUNTIME" }),
+        expect.objectContaining({ upstream: "DB", current: "AARONDB" })
+      ]),
       excludedRuntime: "cloudflare sandbox containers"
     });
   });
@@ -37,6 +44,7 @@ describe("buildBootstrapStatus", () => {
       authMode: "none",
       authBoundary: expect.stringContaining("effectively open"),
       assistantRuntime: "deterministic-fallback",
+      assistantBindingStatus: "missing",
       assistantFallbackBehavior: expect.stringContaining("No AI binding is configured")
     });
   });

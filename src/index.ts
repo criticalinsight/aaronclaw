@@ -4,7 +4,16 @@ import {
   renderLandingPage
 } from "./routes";
 import { getConfiguredModel } from "./assistant";
+import { runScheduledMaintenance } from "./reflection-engine";
 import { SessionRuntime } from "./session-runtime";
+import {
+  buildTelegramMessageMetadata,
+  buildTelegramSessionId,
+  isTelegramConfigured,
+  isTelegramWebhookAuthorized,
+  parseTelegramUpdate,
+  sendTelegramReply
+} from "./telegram";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -101,6 +110,99 @@ async function proxyJsonBody(
   });
 }
 
+async function ensureSessionInitialized(stub: DurableObjectStub, sessionId: string): Promise<void> {
+  const stateResponse = await stub.fetch(buildRuntimeUrl("/state", sessionId));
+
+  if (stateResponse.status === 404) {
+    const initResponse = await stub.fetch(buildRuntimeUrl("/init", sessionId), {
+      method: "POST"
+    });
+
+    if (!initResponse.ok) {
+      throw new Error(`telegram session init failed with status ${initResponse.status}`);
+    }
+
+    return;
+  }
+
+  if (!stateResponse.ok) {
+    throw new Error(`telegram session lookup failed with status ${stateResponse.status}`);
+  }
+}
+
+async function handleTelegramWebhook(request: Request, env: Env): Promise<Response> {
+  if (!isTelegramConfigured(env)) {
+    return json({ error: "telegram integration is not configured" }, 503);
+  }
+
+  if (!isTelegramWebhookAuthorized(request, env)) {
+    return json({ error: "telegram webhook secret mismatch" }, 401);
+  }
+
+  const update = parseTelegramUpdate(await request.json().catch(() => null));
+
+  if (!update) {
+    return json({ error: "invalid telegram update" }, 400);
+  }
+
+  if (!update.message) {
+    return json({ ok: true, ignored: "unsupported-update" });
+  }
+
+  if (update.message.from?.isBot) {
+    return json({ ok: true, ignored: "bot-message" });
+  }
+
+  const content = update.message.text?.trim();
+
+  if (!content) {
+    return json({ ok: true, ignored: "non-text-message" });
+  }
+
+  const sessionId = buildTelegramSessionId(update.message);
+  const stub = getSessionStub(env, sessionId);
+
+  try {
+    await ensureSessionInitialized(stub, sessionId);
+
+    const chatResponse = await stub.fetch(buildRuntimeUrl("/chat", sessionId), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json; charset=UTF-8"
+      },
+      body: JSON.stringify({
+        content,
+        metadata: buildTelegramMessageMetadata(update, update.message)
+      })
+    });
+
+    if (!chatResponse.ok) {
+      throw new Error(`telegram chat proxy failed with status ${chatResponse.status}`);
+    }
+
+    const payload = (await chatResponse.json()) as {
+      assistant?: { content?: string };
+    };
+    const reply = payload.assistant?.content?.trim();
+
+    if (!reply) {
+      throw new Error("telegram chat proxy returned an empty assistant reply");
+    }
+
+    await sendTelegramReply({
+      env,
+      chatId: update.message.chat.id,
+      replyToMessageId: update.message.messageId,
+      text: reply
+    });
+
+    return json({ ok: true });
+  } catch (error) {
+    console.error("telegram webhook handling failed", error);
+    return json({ error: "telegram webhook handling failed" }, 502);
+  }
+}
+
 export { SessionRuntime };
 
 export default {
@@ -126,6 +228,10 @@ export default {
             }
           })
         : json(status);
+    }
+
+    if (request.method === "POST" && url.pathname === "/telegram/webhook") {
+      return handleTelegramWebhook(request, env);
     }
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) {
@@ -199,6 +305,7 @@ export default {
         routes: [
           "GET /",
           "GET /health",
+          "POST /telegram/webhook",
           "POST /api/sessions",
           "GET /api/sessions/:id",
           "POST /api/sessions/:id/chat",
@@ -209,5 +316,16 @@ export default {
       },
       404
     );
+  },
+  async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    try {
+      await runScheduledMaintenance({
+        env,
+        cron: controller.cron,
+        timestamp: new Date(controller.scheduledTime).toISOString()
+      });
+    } catch (error) {
+      console.error("scheduled maintenance failed", error);
+    }
   }
 };

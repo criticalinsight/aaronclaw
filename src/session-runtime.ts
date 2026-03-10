@@ -6,6 +6,8 @@ import {
 } from "./session-state";
 import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { generateAssistantReply } from "./assistant";
+import { queryKnowledgeVault } from "./knowledge-vault";
+import { reflectSession } from "./reflection-engine";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -95,12 +97,19 @@ export class SessionRuntime {
           query: content,
           limit: 3
         });
+        const knowledgeVault = await queryKnowledgeVault({
+          env: this.env,
+          sessionId,
+          query: content,
+          limit: 3
+        });
         const assistant = await generateAssistantReply({
           env: this.env,
           session: userSession,
           sessionId,
           userMessage: content,
-          recallMatches
+          recallMatches,
+          knowledgeVaultMatches: knowledgeVault.matches
         });
         const session = await repository.appendMessage({
           timestamp: new Date().toISOString(),
@@ -108,13 +117,29 @@ export class SessionRuntime {
           content: assistant.content,
           metadata: {
             model: assistant.model ?? "fallback",
+            knowledgeVaultMatchCount: knowledgeVault.matches.length,
+            knowledgeVaultSource: knowledgeVault.source,
             recallMatchCount: assistant.recallMatches.length,
             source: assistant.source,
             ...(assistant.fallbackReason
               ? { fallbackReason: assistant.fallbackReason }
+              : {}),
+            ...(assistant.fallbackDetail
+              ? { fallbackDetail: assistant.fallbackDetail }
               : {})
           }
         });
+
+        try {
+          await reflectSession({
+            env: this.env,
+            sessionId,
+            session,
+            timestamp: new Date().toISOString()
+          });
+        } catch {
+          // Keep the chat path stable if reflection persistence is unavailable.
+        }
 
         return json({ assistant, session }, 201);
       } catch (error) {

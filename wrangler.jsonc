@@ -30,6 +30,18 @@
       "preview_database_id": "aaronclaw-local"
     }
   ],
+  "vectorize": [
+    {
+      "binding": "VECTOR_INDEX",
+      "index_name": "aaronclaw-knowledge-vault"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/30 * * * *",
+      "0 8 * * *"
+    ]
+  },
   "migrations": [
     {
       "tag": "bootstrap-v1",

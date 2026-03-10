@@ -108,17 +108,138 @@ export interface SessionStateRepository {
   }): Promise<RecallMatch[]>;
 }
 
-interface EventDraft {
-  id: string;
-  tx: number;
-  kind?: SessionEventKind;
-  createdAt?: string;
-  role?: MessageRole;
-  content?: string;
-  toolName?: string;
-  summary?: string;
-  metadata: JsonObject | null;
-  recallTerms: Set<string>;
+type AaronDbEntityIndex = Map<AaronDbAttribute, AaronDbFactRecord[]>;
+type AaronDbAttributeValueIndex = Map<string, AaronDbFactRecord[]>;
+
+class AaronDbCompatMemoryIndex {
+  private readonly eavt = new Map<string, AaronDbEntityIndex>();
+  private readonly aevt = new Map<AaronDbAttribute, AaronDbFactRecord[]>();
+  private readonly avet = new Map<AaronDbAttribute, AaronDbAttributeValueIndex>();
+  private latestTx = 0;
+
+  reset(facts: AaronDbFactRecord[]): void {
+    this.eavt.clear();
+    this.aevt.clear();
+    this.avet.clear();
+    this.latestTx = 0;
+    this.appendMany(facts);
+  }
+
+  appendMany(facts: AaronDbFactRecord[]): void {
+    for (const fact of [...facts].sort(compareFacts)) {
+      this.append(fact);
+    }
+  }
+
+  getLatestTx(): number {
+    return this.latestTx;
+  }
+
+  getLatestValue(
+    entity: string,
+    attribute: AaronDbAttribute,
+    asOf?: number
+  ): JsonValue | undefined {
+    return this.findLatestFact(this.eavt.get(entity)?.get(attribute), asOf)?.value;
+  }
+
+  getAllValues(entity: string, attribute: AaronDbAttribute, asOf?: number): JsonValue[] {
+    return (this.eavt.get(entity)?.get(attribute) ?? [])
+      .filter((fact) => this.isVisible(fact, asOf))
+      .map((fact) => fact.value);
+  }
+
+  getEntityLastTx(entity: string, asOf?: number): number {
+    const entityFacts = this.eavt.get(entity);
+
+    if (!entityFacts) {
+      return 0;
+    }
+
+    let latestTx = 0;
+
+    for (const facts of entityFacts.values()) {
+      const fact = this.findLatestFact(facts, asOf);
+
+      if (fact) {
+        latestTx = Math.max(latestTx, fact.tx);
+      }
+    }
+
+    return latestTx;
+  }
+
+  findEntities(attribute: AaronDbAttribute, value: JsonValue, asOf?: number): string[] {
+    const facts = this.avet.get(attribute)?.get(serializeValueKey(value)) ?? [];
+    const entities = new Set<string>();
+
+    for (const fact of facts) {
+      if (this.isVisible(fact, asOf)) {
+        entities.add(fact.entity);
+      }
+    }
+
+    return [...entities];
+  }
+
+  findEntitiesWithAttribute(attribute: AaronDbAttribute, asOf?: number): string[] {
+    const facts = this.aevt.get(attribute) ?? [];
+    const entities = new Set<string>();
+
+    for (const fact of facts) {
+      if (this.isVisible(fact, asOf)) {
+        entities.add(fact.entity);
+      }
+    }
+
+    return [...entities];
+  }
+
+  private append(fact: AaronDbFactRecord): void {
+    const entityFacts = this.eavt.get(fact.entity) ?? new Map<AaronDbAttribute, AaronDbFactRecord[]>();
+    const attributeFacts = entityFacts.get(fact.attribute) ?? [];
+    attributeFacts.push(fact);
+    entityFacts.set(fact.attribute, attributeFacts);
+    this.eavt.set(fact.entity, entityFacts);
+
+    const factsForAttribute = this.aevt.get(fact.attribute) ?? [];
+    factsForAttribute.push(fact);
+    this.aevt.set(fact.attribute, factsForAttribute);
+
+    const valuesForAttribute = this.avet.get(fact.attribute) ?? new Map<string, AaronDbFactRecord[]>();
+    const valueKey = serializeValueKey(fact.value);
+    const factsForValue = valuesForAttribute.get(valueKey) ?? [];
+    factsForValue.push(fact);
+    valuesForAttribute.set(valueKey, factsForValue);
+    this.avet.set(fact.attribute, valuesForAttribute);
+
+    this.latestTx = Math.max(this.latestTx, fact.tx);
+  }
+
+  private findLatestFact(
+    facts: AaronDbFactRecord[] | undefined,
+    asOf?: number
+  ): AaronDbFactRecord | undefined {
+    if (!facts || facts.length === 0) {
+      return undefined;
+    }
+
+    if (asOf === undefined) {
+      return facts[facts.length - 1];
+    }
+
+    for (let index = facts.length - 1; index >= 0; index -= 1) {
+      if (facts[index].tx <= asOf) {
+        return facts[index];
+      }
+    }
+
+    return undefined;
+  }
+
+  private isVisible(fact: AaronDbFactRecord, asOf?: number): boolean {
+    return asOf === undefined || fact.tx <= asOf;
+  }
 }
 
 const FACT_SELECT_SQL = `
@@ -174,51 +295,36 @@ function createFact(
   };
 }
 
+function compareFacts(left: AaronDbFactRecord, right: AaronDbFactRecord): number {
+  return left.tx - right.tx || left.txIndex - right.txIndex;
+}
+
+function serializeValueKey(value: JsonValue): string {
+  return JSON.stringify(value);
+}
+
+function asString(value: JsonValue | undefined): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function asMessageRole(value: JsonValue | undefined): MessageRole | undefined {
+  return value === "user" || value === "assistant" ? value : undefined;
+}
+
+function asJsonObject(value: JsonValue | undefined): JsonObject | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+}
+
 function previewForEvent(event: SessionEvent): string {
   return event.kind === "message"
     ? event.content
     : `${event.toolName}: ${event.summary}`;
 }
 
-function finalizeEvent(draft: EventDraft): SessionEvent | null {
-  const recallTerms = [...draft.recallTerms].sort();
-
-  if (draft.kind === "message" && draft.createdAt && draft.role && draft.content) {
-    return {
-      id: draft.id,
-      kind: "message",
-      createdAt: draft.createdAt,
-      tx: draft.tx,
-      role: draft.role,
-      content: draft.content,
-      metadata: draft.metadata,
-      recallTerms
-    };
-  }
-
-  if (
-    draft.kind === "tool-event" &&
-    draft.createdAt &&
-    draft.toolName &&
-    draft.summary
-  ) {
-    return {
-      id: draft.id,
-      kind: "tool-event",
-      createdAt: draft.createdAt,
-      tx: draft.tx,
-      toolName: draft.toolName,
-      summary: draft.summary,
-      metadata: draft.metadata,
-      recallTerms
-    };
-  }
-
-  return null;
-}
-
 export class AaronDbEdgeSessionRepository implements SessionStateRepository {
-  private facts: AaronDbFactRecord[] = [];
+  private readonly memoryIndex = new AaronDbCompatMemoryIndex();
   private hydrated = false;
   private hydratePromise: Promise<void> | null = null;
   private currentProjection: SessionRecord | null = null;
@@ -445,9 +551,9 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     limit?: number;
     asOf?: number;
   }): Promise<RecallMatch[]> {
-    const session = await this.getSession({ asOf: input.asOf });
+    await this.ensureHydrated();
 
-    if (!session) {
+    if (this.memoryIndex.getLatestValue(this.sessionId, "type", input.asOf) !== "session") {
       return [];
     }
 
@@ -457,24 +563,30 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
       return [];
     }
 
-    return session.events
+    const candidateEventIds = new Set<string>();
+
+    for (const term of queryTerms) {
+      for (const eventId of this.memoryIndex.findEntities("memoryTerm", term, input.asOf)) {
+        candidateEventIds.add(eventId);
+      }
+    }
+
+    return [...candidateEventIds]
+      .map((eventId) => this.projectEvent(eventId, input.asOf))
+      .filter((event): event is SessionEvent => event !== null)
       .map((event) => {
-        const matchedTerms = event.recallTerms.filter((term) =>
-          queryTerms.includes(term)
-        );
+        const matchedTerms = event.recallTerms.filter((term) => queryTerms.includes(term));
 
-        if (matchedTerms.length === 0) {
-          return null;
-        }
-
-        return {
-          eventId: event.id,
-          kind: event.kind,
-          tx: event.tx,
-          matchedTerms,
-          score: matchedTerms.length / queryTerms.length,
-          preview: previewForEvent(event)
-        } satisfies RecallMatch;
+        return matchedTerms.length === 0
+          ? null
+          : {
+              eventId: event.id,
+              kind: event.kind,
+              tx: event.tx,
+              matchedTerms,
+              score: matchedTerms.length / queryTerms.length,
+              preview: previewForEvent(event)
+            } satisfies RecallMatch;
       })
       .filter((match): match is RecallMatch => match !== null)
       .sort((left, right) => right.score - left.score || right.tx - left.tx)
@@ -499,7 +611,7 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
       .bind(this.sessionId)
       .all<AaronDbFactRow>();
 
-    this.facts = (result.results ?? []).map((row) => ({
+    const facts = (result.results ?? []).map((row) => ({
       sessionId: row.session_id,
       entity: row.entity,
       attribute: row.attribute,
@@ -509,6 +621,8 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
       occurredAt: row.occurred_at,
       operation: row.operation
     }));
+
+    this.memoryIndex.reset(facts);
     this.currentProjection = this.project();
     this.hydrated = true;
   }
@@ -531,110 +645,21 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
       )
     );
 
-    this.facts.push(...facts);
+    this.memoryIndex.appendMany(facts);
     this.currentProjection = this.project();
   }
 
   private project(asOf?: number): SessionRecord | null {
-    if (this.facts.length === 0) {
+    if (this.memoryIndex.getLatestValue(this.sessionId, "type", asOf) !== "session") {
       return null;
     }
 
-    const eventDrafts = new Map<string, EventDraft>();
-    let sessionExists = false;
-    let createdAt = "";
-    let lastActiveAt = "";
-    let lastTx = 0;
-
-    for (const fact of this.facts) {
-      if (asOf !== undefined && fact.tx > asOf) {
-        break;
-      }
-
-      lastTx = Math.max(lastTx, fact.tx);
-
-      if (fact.entity === this.sessionId) {
-        if (fact.attribute === "type" && fact.value === "session") {
-          sessionExists = true;
-        }
-
-        if (fact.attribute === "createdAt" && typeof fact.value === "string") {
-          createdAt = fact.value;
-        }
-
-        if (fact.attribute === "lastActiveAt" && typeof fact.value === "string") {
-          lastActiveAt = fact.value;
-        }
-
-        continue;
-      }
-
-      let draft = eventDrafts.get(fact.entity);
-
-      if (!draft) {
-        draft = {
-          id: fact.entity,
-          tx: fact.tx,
-          metadata: null,
-          recallTerms: new Set<string>()
-        };
-        eventDrafts.set(fact.entity, draft);
-      }
-
-      draft.tx = Math.max(draft.tx, fact.tx);
-
-      switch (fact.attribute) {
-        case "type":
-          if (fact.value === "message" || fact.value === "tool-event") {
-            draft.kind = fact.value;
-          }
-          break;
-        case "createdAt":
-          if (typeof fact.value === "string") {
-            draft.createdAt = fact.value;
-          }
-          break;
-        case "role":
-          if (fact.value === "user" || fact.value === "assistant") {
-            draft.role = fact.value;
-          }
-          break;
-        case "content":
-          if (typeof fact.value === "string") {
-            draft.content = fact.value;
-          }
-          break;
-        case "toolName":
-          if (typeof fact.value === "string") {
-            draft.toolName = fact.value;
-          }
-          break;
-        case "summary":
-          if (typeof fact.value === "string") {
-            draft.summary = fact.value;
-          }
-          break;
-        case "metadata":
-          if (fact.value && typeof fact.value === "object" && !Array.isArray(fact.value)) {
-            draft.metadata = fact.value as JsonObject;
-          }
-          break;
-        case "memoryTerm":
-          if (typeof fact.value === "string") {
-            draft.recallTerms.add(fact.value);
-          }
-          break;
-        default:
-          break;
-      }
-    }
-
-    if (!sessionExists) {
-      return null;
-    }
-
-    const events = [...eventDrafts.values()]
-      .map((draft) => finalizeEvent(draft))
+    const createdAt = asString(this.memoryIndex.getLatestValue(this.sessionId, "createdAt", asOf)) ?? "";
+    const lastActiveAt =
+      asString(this.memoryIndex.getLatestValue(this.sessionId, "lastActiveAt", asOf)) ?? createdAt;
+    const events = this.memoryIndex
+      .findEntities("session", this.sessionId, asOf)
+      .map((entity) => this.projectEvent(entity, asOf))
       .filter((event): event is SessionEvent => event !== null)
       .sort((left, right) => left.tx - right.tx);
 
@@ -648,20 +673,73 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     return {
       id: this.sessionId,
       createdAt,
-      lastActiveAt: lastActiveAt || createdAt,
-      lastTx,
+      lastActiveAt,
+      lastTx: this.memoryIndex.getEntityLastTx(this.sessionId, asOf),
       persistence: "aarondb-edge",
       memorySource: "aarondb-edge",
       events,
       messages,
       toolEvents,
-      recallableMemoryCount: events.filter((event) => event.recallTerms.length > 0)
-        .length
+      recallableMemoryCount: this.memoryIndex.findEntitiesWithAttribute("memoryTerm", asOf).length
     };
   }
 
+  private projectEvent(entity: string, asOf?: number): SessionEvent | null {
+    const kind = this.memoryIndex.getLatestValue(entity, "type", asOf);
+    const createdAt = asString(this.memoryIndex.getLatestValue(entity, "createdAt", asOf));
+    const metadata = asJsonObject(this.memoryIndex.getLatestValue(entity, "metadata", asOf));
+    const recallTerms = [
+      ...new Set(
+        this.memoryIndex
+          .getAllValues(entity, "memoryTerm", asOf)
+          .filter((value): value is string => typeof value === "string")
+      )
+    ].sort();
+    const tx = this.memoryIndex.getEntityLastTx(entity, asOf);
+
+    if (kind === "message") {
+      const role = asMessageRole(this.memoryIndex.getLatestValue(entity, "role", asOf));
+      const content = asString(this.memoryIndex.getLatestValue(entity, "content", asOf));
+
+      if (createdAt && role && content) {
+        return {
+          id: entity,
+          kind,
+          createdAt,
+          tx,
+          role,
+          content,
+          metadata,
+          recallTerms
+        };
+      }
+
+      return null;
+    }
+
+    if (kind === "tool-event") {
+      const toolName = asString(this.memoryIndex.getLatestValue(entity, "toolName", asOf));
+      const summary = asString(this.memoryIndex.getLatestValue(entity, "summary", asOf));
+
+      if (createdAt && toolName && summary) {
+        return {
+          id: entity,
+          kind,
+          createdAt,
+          tx,
+          toolName,
+          summary,
+          metadata,
+          recallTerms
+        };
+      }
+    }
+
+    return null;
+  }
+
   private nextTx(): number {
-    return (this.facts[this.facts.length - 1]?.tx ?? 0) + 1;
+    return this.memoryIndex.getLatestTx() + 1;
   }
 
   private requireCurrentProjection(): SessionRecord {

@@ -8,6 +8,9 @@ const outputPath = resolve(outputDir, "wrangler.jsonc");
 
 const databaseId = process.env.AARONCLAW_D1_DATABASE_ID?.trim();
 const databaseName = process.env.AARONCLAW_D1_DATABASE_NAME?.trim();
+const includeVectorize = /^(1|true)$/i.test(
+  process.env.AARONCLAW_DEPLOY_WITH_VECTORIZE?.trim() ?? ""
+);
 
 if (!databaseId) {
   fail(
@@ -42,6 +45,13 @@ if (databaseName) {
   );
 }
 
+if (!includeVectorize) {
+  configText = configText.replace(
+    /\n\s*"vectorize"\s*:\s*\[\s*\{\s*"binding"\s*:\s*"VECTOR_INDEX"\s*,\s*"index_name"\s*:\s*"[^"]+"\s*\}\s*\],?/m,
+    ""
+  );
+}
+
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(outputPath, configText);
 
@@ -49,6 +59,9 @@ console.log(`Generated deploy config at ${outputPath}`);
 console.log(`- database_id: ${databaseId}`);
 console.log(
   `- database_name: ${databaseName || "aaronclaw-aarondb"}`
+);
+console.log(
+  `- vectorize: ${includeVectorize ? "included" : "omitted (D1 compatibility fallback)"}`
 );
 
 function fail(message) {
