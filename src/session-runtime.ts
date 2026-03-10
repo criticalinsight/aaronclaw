@@ -5,8 +5,11 @@ import {
   type SessionStateRepository
 } from "./session-state";
 import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
-import { generateAssistantReply } from "./assistant";
+import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
 import { queryKnowledgeVault } from "./knowledge-vault";
+import { resolveModelSelection } from "./model-registry";
+import { readPersistedModelSelection } from "./model-selection-store";
+import { readProviderKeyStatus, resolveProviderApiKey } from "./provider-key-store";
 import { reflectSession } from "./reflection-engine";
 
 function json(data: unknown, status = 200): Response {
@@ -103,13 +106,33 @@ export class SessionRuntime {
           query: content,
           limit: 3
         });
+        const persistedModelId = await readPersistedModelSelection(this.env.AARONDB);
+        const geminiKeyStatus = await readProviderKeyStatus({
+          env: this.env,
+          database: this.env.AARONDB,
+          provider: "gemini"
+        });
+        const modelSelection = resolveModelSelection(this.env, persistedModelId, {
+          geminiConfigured: geminiKeyStatus.configured,
+          geminiValidationStatus: geminiKeyStatus.validation.status
+        });
+        const geminiApiKey =
+          geminiKeyStatus.validation.status === "valid"
+            ? await resolveProviderApiKey({
+                env: this.env,
+                database: this.env.AARONDB,
+                provider: "gemini"
+              })
+            : null;
         const assistant = await generateAssistantReply({
           env: this.env,
           session: userSession,
           sessionId,
           userMessage: content,
           recallMatches,
-          knowledgeVaultMatches: knowledgeVault.matches
+          knowledgeVaultMatches: knowledgeVault.matches,
+          primaryRoute: buildAssistantRoute(modelSelection.activeModel, geminiApiKey),
+          fallbackRoute: buildFallbackAssistantRoute(modelSelection, geminiApiKey)
         });
         const session = await repository.appendMessage({
           timestamp: new Date().toISOString(),
@@ -121,6 +144,13 @@ export class SessionRuntime {
             knowledgeVaultSource: knowledgeVault.source,
             recallMatchCount: assistant.recallMatches.length,
             source: assistant.source,
+            ...(persistedModelId ? { requestedModelId: modelSelection.requestedModelId } : {}),
+            ...(persistedModelId && modelSelection.activeModelId
+              ? { activeModelId: modelSelection.activeModelId }
+              : {}),
+            ...(modelSelection.selectionFallbackReason
+              ? { modelSelectionFallbackReason: modelSelection.selectionFallbackReason }
+              : {}),
             ...(assistant.fallbackReason
               ? { fallbackReason: assistant.fallbackReason }
               : {}),
@@ -212,6 +242,61 @@ export class SessionRuntime {
 
     return this.repository;
   }
+}
+
+function buildAssistantRoute(
+  model:
+    | {
+        provider: "workers-ai" | "gemini";
+        model: string;
+      }
+    | null,
+  geminiApiKey: string | null
+): AssistantProviderRoute | null {
+  if (!model) {
+    return null;
+  }
+
+  return model.provider === "gemini"
+    ? {
+        provider: "gemini",
+        model: model.model,
+        apiKey: geminiApiKey
+      }
+    : {
+        provider: "workers-ai",
+        model: model.model
+      };
+}
+
+function buildFallbackAssistantRoute(
+  modelSelection: {
+    activeModel: { provider: "workers-ai" | "gemini"; model: string } | null;
+    models: Array<{
+      provider: "workers-ai" | "gemini";
+      model: string;
+      selectable: boolean;
+    }>;
+  },
+  geminiApiKey: string | null
+): AssistantProviderRoute | null {
+  if (modelSelection.activeModel?.provider === "gemini") {
+    const workersModel = modelSelection.models.find(
+      (candidate) => candidate.provider === "workers-ai" && candidate.selectable
+    );
+    return workersModel ? { provider: "workers-ai", model: workersModel.model } : null;
+  }
+
+  const geminiModel = modelSelection.models.find(
+    (candidate) => candidate.provider === "gemini" && candidate.selectable
+  );
+  return geminiModel
+    ? {
+        provider: "gemini",
+        model: geminiModel.model,
+        apiKey: geminiApiKey
+      }
+    : null;
 }
 
 function parseOptionalInteger(value: string | null): number | undefined {
