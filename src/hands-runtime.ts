@@ -1,4 +1,8 @@
-import { runScheduledMaintenance, scheduledMaintenanceCrons } from "./reflection-engine";
+import {
+  runScheduledImprovementProposalReview,
+  runScheduledMaintenance,
+  scheduledMaintenanceCrons
+} from "./reflection-engine";
 import { AaronDbEdgeSessionRepository, type JsonObject, type ToolEvent } from "./session-state";
 import { buildToolAuditRecord } from "./tool-policy";
 
@@ -17,6 +21,15 @@ const bundledHands = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "scheduled-maintenance"
+  },
+  {
+    id: "improvement-hand",
+    label: "Improvement Hand",
+    description:
+      "Periodically reviews stored reflection signals and writes bounded structured proposals into the improvement candidate store without mutating production behavior.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
+    implementation: "improvement-hand"
   }
 ] as const;
 
@@ -30,8 +43,13 @@ export interface HandRunRecord {
   cron: string | null;
   summary: string;
   maintenanceSessionId: string | null;
+  proposalSessionId: string | null;
   reviewedSessionCount: number;
   reflectedSessionCount: number;
+  reviewedSignalCount: number;
+  reviewedReflectionCount: number;
+  generatedProposalCount: number;
+  skippedDuplicateProposalCount: number;
   error: string | null;
 }
 
@@ -204,7 +222,46 @@ async function executeBundledHandRun(input: {
   const repository = await ensureHandRepository(input.env, input.definition, input.timestamp);
 
   try {
-    const maintenance = await runScheduledMaintenance({
+    if (input.definition.implementation === "scheduled-maintenance") {
+      const maintenance = await runScheduledMaintenance({
+        env: input.env,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} ran for cron ${input.cron} and reused the scheduled maintenance path.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          maintenanceSessionId: maintenance.maintenanceSessionId,
+          reflectedSessionCount: maintenance.reflectedSessionIds.length,
+          reviewedSessionCount: maintenance.reviewedSessionIds.length,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} completed successfully for cron ${input.cron}.`,
+            extra: {
+              cron: input.cron,
+              maintenanceSessionId: maintenance.maintenanceSessionId,
+              reflectedSessionCount: maintenance.reflectedSessionIds.length,
+              reviewedSessionCount: maintenance.reviewedSessionIds.length
+            }
+          })
+        }
+      });
+      return;
+    }
+
+    const proposalReview = await runScheduledImprovementProposalReview({
       env: input.env,
       cron: input.cron,
       timestamp: input.timestamp
@@ -213,14 +270,16 @@ async function executeBundledHandRun(input: {
     await repository.appendToolEvent({
       timestamp: input.timestamp,
       toolName: HAND_RUN_TOOL,
-      summary: `${input.definition.label} ran for cron ${input.cron} and reused the scheduled maintenance path.`,
+      summary: `${input.definition.label} reviewed ${proposalReview.reviewedSignalCount} stored signal(s) and wrote ${proposalReview.generatedProposalCount} structured proposal(s) for cron ${input.cron}.`,
       metadata: {
         action: "run",
         cron: input.cron,
+        generatedProposalCount: proposalReview.generatedProposalCount,
         handId: input.definition.id,
-        maintenanceSessionId: maintenance.maintenanceSessionId,
-        reflectedSessionCount: maintenance.reflectedSessionIds.length,
-        reviewedSessionCount: maintenance.reviewedSessionIds.length,
+        proposalSessionId: proposalReview.proposalSessionId,
+        reviewedReflectionCount: proposalReview.reviewedReflectionSessionIds.length,
+        reviewedSignalCount: proposalReview.reviewedSignalCount,
+        skippedDuplicateProposalCount: proposalReview.skippedDuplicateProposalCount,
         status: "succeeded",
         audit: buildToolAuditRecord({
           toolId: "hand-run",
@@ -232,9 +291,11 @@ async function executeBundledHandRun(input: {
           detail: `${input.definition.label} completed successfully for cron ${input.cron}.`,
           extra: {
             cron: input.cron,
-            maintenanceSessionId: maintenance.maintenanceSessionId,
-            reflectedSessionCount: maintenance.reflectedSessionIds.length,
-            reviewedSessionCount: maintenance.reviewedSessionIds.length
+            generatedProposalCount: proposalReview.generatedProposalCount,
+            proposalSessionId: proposalReview.proposalSessionId,
+            reviewedReflectionCount: proposalReview.reviewedReflectionSessionIds.length,
+            reviewedSignalCount: proposalReview.reviewedSignalCount,
+            skippedDuplicateProposalCount: proposalReview.skippedDuplicateProposalCount
           }
         })
       }
@@ -351,11 +412,23 @@ function toHandRunRecord(event: ToolEvent): HandRunRecord {
       typeof event.metadata?.maintenanceSessionId === "string"
         ? event.metadata.maintenanceSessionId
         : null,
+    proposalSessionId:
+      typeof event.metadata?.proposalSessionId === "string" ? event.metadata.proposalSessionId : null,
     reviewedSessionCount:
       typeof event.metadata?.reviewedSessionCount === "number" ? event.metadata.reviewedSessionCount : 0,
     reflectedSessionCount:
       typeof event.metadata?.reflectedSessionCount === "number"
         ? event.metadata.reflectedSessionCount
+        : 0,
+    reviewedSignalCount:
+      typeof event.metadata?.reviewedSignalCount === "number" ? event.metadata.reviewedSignalCount : 0,
+    reviewedReflectionCount:
+      typeof event.metadata?.reviewedReflectionCount === "number" ? event.metadata.reviewedReflectionCount : 0,
+    generatedProposalCount:
+      typeof event.metadata?.generatedProposalCount === "number" ? event.metadata.generatedProposalCount : 0,
+    skippedDuplicateProposalCount:
+      typeof event.metadata?.skippedDuplicateProposalCount === "number"
+        ? event.metadata.skippedDuplicateProposalCount
         : 0,
     error: typeof event.metadata?.error === "string" ? event.metadata.error : null
   };

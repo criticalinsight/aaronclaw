@@ -9,6 +9,7 @@ export type ToolId =
   | "provider-key-management"
   | "hand-lifecycle"
   | "hand-run"
+  | "improvement-proposal-review"
   | "session-reflection"
   | "scheduled-maintenance"
   | "morning-briefing";
@@ -68,6 +69,14 @@ const TOOL_DEFINITIONS = {
     label: "Hand execution",
     description: "Executes a scheduled bundled hand and records the result.",
     capability: "hand.execute.scheduled",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "improvement-proposal-review": {
+    id: "improvement-proposal-review",
+    label: "Improvement proposal review",
+    description: "Reviews stored reflection signals and writes structured improvement proposals.",
+    capability: "improvement.propose.reflection",
     policy: "scheduled-safe",
     declarationMode: "scheduled"
   },

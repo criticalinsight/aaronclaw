@@ -696,6 +696,26 @@ describe("worker session routes", () => {
       toolName: "session-reflection"
     });
     expect(reflectionSession?.toolEvents[0]?.summary).toContain("Reflection for");
+    expect(reflectionSession?.toolEvents[0]?.metadata).toMatchObject({
+      improvementSignalCount: 1,
+      improvementCandidateCount: 1,
+      improvementSignals: [
+        expect.objectContaining({
+          signalKey: "evidence-intent-without-tool-trace",
+          category: "verification",
+          status: "active",
+          risk: expect.objectContaining({ level: "high" }),
+          verification: expect.objectContaining({ status: "pending" })
+        })
+      ],
+      improvementCandidates: [
+        expect.objectContaining({
+          candidateKey: "add-tool-backed-verification-step",
+          status: "proposed",
+          derivedFromSignalKeys: ["evidence-intent-without-tool-trace"]
+        })
+      ]
+    });
   });
 
   it("preserves the init, messages, and tool-events session API flow", async () => {
@@ -1791,6 +1811,11 @@ describe("worker session routes", () => {
           id: "scheduled-maintenance",
           status: "paused",
           persisted: false
+        }),
+        expect.objectContaining({
+          id: "improvement-hand",
+          status: "paused",
+          persisted: false
         })
       ])
     );
@@ -1811,6 +1836,130 @@ describe("worker session routes", () => {
       id: "scheduled-maintenance",
       status: "paused",
       persisted: true
+    });
+  });
+
+  it("runs the Improvement Hand against stored reflections and persists deduped structured proposals", async () => {
+    const { env, database } = createEnv({ appAuthToken: "letmein" });
+
+    await seedHistoricalSession(
+      database,
+      "history-improvement",
+      "Please verify with evidence why the route keeps falling back before you answer."
+    );
+    await reflectSession({ env, sessionId: "history-improvement", timestamp: "2026-03-09T07:55:00.000Z" });
+
+    const activatedResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/improvement-hand/activate", {
+        method: "POST",
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+
+    expect(activatedResponse.status).toBe(200);
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:00:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "improvement:proposals"
+    );
+    const proposalSession = await proposalRepository.getSession();
+    const handResponse = await worker.fetch(
+      new Request("https://aaronclaw.test/api/hands/improvement-hand", {
+        headers: { authorization: "Bearer letmein" }
+      }),
+      env as Env
+    );
+    const handBody = (await handResponse.json()) as {
+      hand: {
+        status: string;
+        latestRun: {
+          status: string;
+          proposalSessionId: string | null;
+          reviewedSignalCount: number;
+          generatedProposalCount: number;
+          skippedDuplicateProposalCount: number;
+        } | null;
+      };
+    };
+
+    expect(handResponse.status).toBe(200);
+    expect(handBody.hand.status).toBe("active");
+    expect(handBody.hand.latestRun).toMatchObject({
+      status: "succeeded",
+      proposalSessionId: "improvement:proposals",
+      reviewedSignalCount: 1,
+      generatedProposalCount: 1,
+      skippedDuplicateProposalCount: 0
+    });
+    expect(proposalSession?.toolEvents).toHaveLength(1);
+    expect(proposalSession?.toolEvents[0]?.metadata).toMatchObject({
+      audit: {
+        toolId: "improvement-proposal-review",
+        capability: "improvement.propose.reflection",
+        policy: "scheduled-safe",
+        outcome: "succeeded"
+      },
+      generatedProposalCount: 1,
+      reviewedSignalCount: 1,
+      proposals: [
+        expect.objectContaining({
+          candidateKey: "promote-evidence-backed-pattern",
+          proposalKey: "reflection:history-improvement@3:promote-evidence-backed-pattern",
+          sourceReflectionSessionId: "reflection:history-improvement",
+          sourceSessionId: "history-improvement",
+          sourceLastTx: 3,
+          problemStatement:
+            "The session paired evidence-seeking language with a persisted tool trace that future foundation work can reuse.",
+          proposedAction:
+            "Promote the current evidence-backed reasoning pattern into a reusable skill/maintenance prompt contract.",
+          expectedBenefit:
+            "Captures a successful evidence-backed behavior in a reusable form without mutating live production behavior directly.",
+          riskLevel: "low",
+          verificationPlan:
+            "Verify the promoted contract still preserves the existing chat, hands, and Telegram behavior when idle."
+        })
+      ]
+    });
+
+    await worker.scheduled?.(
+      {
+        cron: "*/30 * * * *",
+        noRetry() {},
+        scheduledTime: Date.parse("2026-03-09T08:30:00.000Z"),
+        type: "scheduled"
+      } as ScheduledController,
+      env as Env
+    );
+
+    const proposalSessionAfterReplay = await proposalRepository.getSession();
+    const improvementHandRepository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "hand:improvement-hand"
+    );
+    const improvementHandSession = await improvementHandRepository.getSession();
+
+    expect(proposalSessionAfterReplay?.toolEvents).toHaveLength(1);
+    expect(improvementHandSession?.toolEvents[2]?.metadata).toMatchObject({
+      generatedProposalCount: 0,
+      reviewedSignalCount: 1,
+      skippedDuplicateProposalCount: 1,
+      audit: {
+        toolId: "hand-run",
+        policy: "scheduled-safe",
+        capability: "hand.execute.scheduled",
+        outcome: "succeeded"
+      }
     });
   });
 
@@ -2295,9 +2444,94 @@ describe("reflection engine", () => {
       session,
       timestamp: "2026-03-09T00:00:03.000Z"
     });
+    const reflectionSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "reflection:session-reflect"
+    ).getSession();
 
     expect(reflection.persisted).toBe(true);
     expect(reflection.reflectionSessionId).toBe("reflection:session-reflect");
     expect(reflection.summary).toContain("Reasoning/proof signals");
+    expect(reflection.improvementSignalCount).toBe(1);
+    expect(reflection.improvementCandidateCount).toBe(1);
+    expect(reflectionSession?.toolEvents[0]?.metadata).toMatchObject({
+      improvementSignals: [
+        expect.objectContaining({
+          signalKey: "evidence-backed-reasoning-present",
+          verification: expect.objectContaining({ status: "verified" })
+        })
+      ],
+      improvementCandidates: [
+        expect.objectContaining({
+          candidateKey: "promote-evidence-backed-pattern",
+          derivedFromSignalKeys: ["evidence-backed-reasoning-present"]
+        })
+      ]
+    });
+  });
+
+  it("maps fallback and degraded tool-audit metadata into structured improvement artifacts", async () => {
+    const { env } = createEnv();
+    const repository = new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "session-fallback"
+    );
+
+    await repository.createSession("2026-03-09T00:00:00.000Z");
+    await repository.appendMessage({
+      timestamp: "2026-03-09T00:00:01.000Z",
+      role: "user",
+      content: "Please check why the route keeps falling back."
+    });
+    const session = await repository.appendMessage({
+      timestamp: "2026-03-09T00:00:02.000Z",
+      role: "assistant",
+      content: "I used the fallback path for this request.",
+      metadata: {
+        fallbackReason: "ai-error",
+        toolAuditTrail: [
+          {
+            toolId: "knowledge-vault",
+            outcome: "blocked",
+            detail: "Skill default does not declare knowledge-vault, so cross-session recall was skipped."
+          }
+        ]
+      }
+    });
+
+    const reflection = await reflectSession({
+      env,
+      sessionId: "session-fallback",
+      session,
+      timestamp: "2026-03-09T00:00:03.000Z"
+    });
+    const reflectionSession = await new AaronDbEdgeSessionRepository(
+      env.AARONDB as D1Database,
+      "reflection:session-fallback"
+    ).getSession();
+
+    expect(reflection.persisted).toBe(true);
+    expect(reflection.improvementSignalCount).toBe(2);
+    expect(reflection.improvementCandidateCount).toBe(2);
+    expect(reflectionSession?.toolEvents[0]?.metadata).toMatchObject({
+      improvementSignals: expect.arrayContaining([
+        expect.objectContaining({
+          signalKey: "degraded-tool-audit",
+          evidence: expect.arrayContaining([
+            expect.objectContaining({ kind: "audit" })
+          ])
+        }),
+        expect.objectContaining({
+          signalKey: "assistant-fallback-observed",
+          evidence: expect.arrayContaining([
+            expect.objectContaining({ summary: "fallbackReason=ai-error." })
+          ])
+        })
+      ]),
+      improvementCandidates: expect.arrayContaining([
+        expect.objectContaining({ candidateKey: "stabilize-degraded-tool-path" }),
+        expect.objectContaining({ candidateKey: "track-and-reduce-fallback-frequency" })
+      ])
+    });
   });
 });
