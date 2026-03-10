@@ -49,15 +49,21 @@ The landing page is the main control surface.
 
 1. Open `/`.
 2. If a deployment token field is visible, paste `APP_AUTH_TOKEN` there.
-3. Click **Refresh operator data** to inspect the bundled hands and skills.
+3. Click **Refresh operator data** to inspect the bundled hands, skills, and
+   improvement candidates.
 4. Click **Create session**.
 5. Send a prompt.
 6. Click **Reload state** or refresh the page and reload the same session.
 7. Visit `/health` to confirm the runtime mode.
 
-The UI keeps the active session ID in the `?session=` query param, so once asession exists you can reload or revisit the page and load that session again.
+The UI keeps the active session ID in the `?session=` query param, so once a
+session exists you can reload or revisit the page and load that session again.
 
-The operator section can inspect hands and skills today and can activate/pausehands. It does **not** currently choose a skill for chat from the browser UI;skill selection is per-turn API input through `skillId` on the chat route.
+The operator section can inspect hands, skills, and improvement candidates
+today. It can activate/pause hands and approve/reject/pause reviewable
+improvement candidates. It does **not** currently choose a skill for chat from
+the browser UI; skill selection is per-turn API input through `skillId` on the
+chat route.
 
 ## What to expect locally
 
@@ -71,6 +77,10 @@ The operator section can inspect hands and skills today and can activate/pauseha
   knowledge-vault path.
 - `gemini-review` stays unready until Gemini key material is configured; chat
   requests that opt into that skill return `409` until then.
+- The shipped self-improvement foundation stays review-first:
+  `improvement-hand`, `user-correction-miner`, and `regression-watch` write
+  structured proposals/findings for operator review; bounded shadow evaluation
+  runs in metadata-only mode, and live production mutation remains manual-only.
 - `docs-drift` records bounded reviewable findings when the shipped runtime
   posture meaningfully diverges from this docs set; it never edits repo docs
   automatically.

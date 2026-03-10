@@ -24,30 +24,57 @@ The Worker/DO shell now uses an AaronDB-style state model:
 
 1. **Worker** accepts browser/API traffic and resolves one Durable Object per session.
 2. **Durable Object** owns the hot in-memory projection for that session.
-3. **D1** stores the immutable AaronDB fact log for session facts, messages, toolevents, and recall terms.
-4. **Rehydration** rebuilds session state from D1 so replay survives Durable Objectrestart/reload.
-5. **Recall** uses persisted recall-term facts, giving the next wave a stableAaronDB-backed memory endpoint to call.
+3. **D1** stores the immutable AaronDB fact log for session facts, messages,
+   tool events, and recall terms.
+4. **Rehydration** rebuilds session state from D1 so replay survives Durable
+   Object restart/reload.
+5. **Recall** uses persisted recall-term facts, so the current chat, skill, and
+   hand flows can query memory without introducing a second substrate.
 
-This keeps the architecture Cloudflare-native and browser-first while avoiding areturn to container-first runtime assumptions.
+This keeps the architecture Cloudflare-native and browser-first while avoiding a
+return to container-first runtime assumptions.
 
 ## AaronDB Edge import seam
 
-- The repo now vendors a tight runtime slice from `criticalinsight/aarondb-edge`under `vendor/aarondb-edge/` rather than treating AaronDB Edge as a separateHTTP sidecar Worker.
-- `src/aarondb-edge-substrate.ts` is the explicit seam AaronClaw imports today.It exposes the upstream entrypoint, source manifests, route surface, and FFIhelpers while keeping the current session repository as a temporary adapter.
+- The repo now vendors a tight runtime slice from `criticalinsight/aarondb-edge`
+  under `vendor/aarondb-edge/` rather than treating AaronDB Edge as a separate
+  HTTP sidecar Worker.
+- `src/aarondb-edge-substrate.ts` is the explicit seam AaronClaw imports today.
+  It exposes the upstream entrypoint, source manifests, route surface, and FFI
+  helpers while keeping the current session repository as a temporary adapter.
 - Binding bridge for the current app shape:
   - `AARONDB_STATE` upstream Durable Object → `SESSION_RUNTIME`
   - `DB` upstream D1 binding → `AARONDB`
   - `AI` already matches
-  - `VECTOR_INDEX` now maps through directly and backs the knowledge-vault /Hyper-Recall compatibility path when available.
-  - `CONFIG_KV` and `ARCHIVE` are still not mounted and remain follow-upbindings for the fuller adapter wave.
-- Build implication: upstream `src/index.mjs` imports generated Gleam output from`build/dev/javascript`. Vendoring the source slice now keeps the runtimecontract in-repo, but the next wave must either vendor built artifacts or addan explicit Gleam build step before replacing AaronClaw's handwrittenrepository with imported AaronDB Edge runtime pieces.
+  - `VECTOR_INDEX` now maps through directly and backs the knowledge-vault /
+    Hyper-Recall compatibility path when available.
+  - `CONFIG_KV` and `ARCHIVE` are not mounted in the current shipped slice; the
+    live runtime does not depend on them today.
+- Build implication: upstream `src/index.mjs` imports generated Gleam output
+  from `build/dev/javascript`. Vendoring the source slice keeps the shipped
+  runtime contract in-repo; replacing more of AaronClaw's handwritten
+  repository would require vendored built artifacts or an explicit Gleam build
+  step.
 
 ## Hands and skills runtime
 
-- Bundled hands stay Cloudflare-native. The Worker `scheduled` handler dispatchescron events into `runScheduledHands`, and the current`scheduled-maintenance` hand reuses the existing reflection/maintenance pathinstead of introducing a second runtime.
-- Hand lifecycle is operator-controlled through `/api/hands/:id/activate` and`/api/hands/:id/pause`, with run summaries and structured audit history storedin AaronDB under a synthetic hand session.
-- Bundled skills are manifest-driven and local-only. Each manifest declares itstool set, memory scope, prompt instructions, and required secrets.
-- The session runtime applies that manifest on every chat turn: declared toolsgate session recall, knowledge-vault access, and model-selection behavior, andblocked paths are recorded in audit history instead of silently expandingcapability.
+- Bundled hands stay Cloudflare-native. The Worker `scheduled` handler
+  dispatches cron events into `runScheduledHands`, and the current bundle is
+  `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`,
+  `regression-watch`, `provider-health-watchdog`, and `docs-drift`.
+- Hand lifecycle is operator-controlled through `/api/hands/:id/activate` and
+  `/api/hands/:id/pause`, with run summaries and structured audit history stored
+  in AaronDB under a synthetic hand session.
+- Bundled skills are manifest-driven and local-only. Each manifest declares its
+  tool set, memory scope, prompt instructions, and required secrets.
+- The session runtime applies that manifest on every chat turn: declared tools
+  gate session recall, knowledge-vault access, and model-selection behavior,
+  and blocked paths are recorded in audit history instead of silently expanding
+  capability.
+- The shipped self-improvement foundation stays review-first: structured
+  candidates are persisted with evidence, bounded shadow evaluation, and
+  protected operator review state on `/api/improvements`; promotion markers
+  remain manual-only and do not auto-mutate live production behavior.
 
 ## Dogfood deployment path
 

@@ -36,12 +36,21 @@ In the current codebase and live deployment (`/health`):
   `toolPolicyRuntime: capability-gated`, and
   `toolAuditHistory: structured-session-and-hand-history` describe the current
   hands/skills rollout.
-- Bundled hands stay Cloudflare-native. The current hand bundle is the
-  `scheduled-maintenance` cron-driven hand, with protected activate/pause
-  controls plus persisted run/audit history.
+- Bundled hands stay Cloudflare-native. The current hand bundle is
+  `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`,
+  `regression-watch`, `provider-health-watchdog`, and `docs-drift`.
+- Those hands stay bounded: they persist run/audit history and operator-visible
+  findings or proposals, but they do not mutate live production behavior
+  automatically.
 - Bundled skills are manifest-driven and currently ship as
-  `aarondb-research` (session recall + knowledge vault) and `gemini-review`
-  (session-only review path that requires configured Gemini key material).
+  `aarondb-research` (session recall + knowledge vault), `gemini-review`
+  (session-only review path that requires configured Gemini key material), and
+  `incident-triage` (bounded diagnostics over session, hand, audit, and runtime
+  evidence).
+- The shipped self-improvement foundation is review-first: `/api/improvements`
+  exposes structured candidates with evidence, bounded shadow-evaluation state,
+  and protected operator lifecycle controls; promotion markers remain
+  manual-only and do not apply live mutation automatically.
 - Skill selection for chat is API-driven per turn via `skillId`; the landing
   page currently exposes hands/skills inspection, protected hand controls, and
   protected improvement-candidate review controls, not a skill picker.
@@ -97,6 +106,11 @@ wrangler secret put APP_AUTH_TOKEN
 See [`docs/deployment.md`](docs/deployment.md) for the complete sequence,
 validation notes, and troubleshooting guidance.
 
+Rich Hickey warning: this manual Wrangler path is the only deploy path verified
+from the repo right now. Do **not** assume a push to `plan-cloudflare-openclaw`
+updates `https://aaronclaw.moneyacad.workers.dev` until automatic publish is
+proven with live evidence.
+
 ## Runtime summary
 
 - `GET /` serves the browser UI.
@@ -145,10 +159,12 @@ See [`docs/runtime.md`](docs/runtime.md) for request semantics and browser usage
   route surface, and imported FFI utilities to AaronClaw code.
 - Current seam mapping is `AARONDB_STATE -> SESSION_RUNTIME`, `DB -> AARONDB`,
   `AI -> AI`, and `VECTOR_INDEX -> VECTOR_INDEX`; `CONFIG_KV` and `ARCHIVE`
-  remain explicit next-wave mounts.
+  are not mounted in the current shipped slice because the live runtime does
+  not depend on them.
 - Build implication: upstream `src/index.mjs` expects generated Gleam JS under
-  `build/dev/javascript`, so the next wave must add that bridge before swapping
-  AaronClaw's live repository implementation.
+  `build/dev/javascript`. The current vendored slice is sufficient for the
+  shipped runtime; deeper replacement of AaronClaw's handwritten repository
+  would require vendored built artifacts or an explicit Gleam build step.
 
 ## Repository map
 

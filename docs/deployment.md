@@ -16,6 +16,63 @@ The checked-in `wrangler.jsonc` stays local-first. Real deploys inject the remot
 
 The current checked-in config expects the knowledge-vault index name`aaronclaw-knowledge-vault`. If Vectorize is unavailable, the session runtimedegrades to D1-compatible vault ranking instead of breaking chat, but the liveproduction posture now assumes the binding is present.
 
+## Automatic deploy verification status (2026-03-10)
+
+Rich Hickey warning: do not invent deploy certainty that the repo and production
+surface cannot prove.
+
+What is verified today:
+
+- the repo contains a working **manual** Wrangler deploy path
+- the approved branch is still `plan-cloudflare-openclaw`
+- the public production Worker is `https://aaronclaw.moneyacad.workers.dev`
+
+What is **not** verified today:
+
+- the committed branch state does not yet prove an active checked-in auto-deploy workflow for the chosen branch
+- the GitHub-to-Cloudflare credential/environment mapping may still need to be provisioned before the workflow can run successfully
+- this task has not yet observed a successful GitHub Actions deploy run for the chosen branch
+- recent pushes to `plan-cloudflare-openclaw` did **not** prove automatic publish,
+  because the public landing page and `/health` still expose the older operator
+  surface without `/api/improvements` or the improvement-candidate panel that now
+  exists in the repo
+
+Operator conclusion: if automatic deploys are enabled later, the intended
+direction is a repo-managed GitHub Actions path rather than a dashboard-only
+Cloudflare Git integration. But the Wrangler path below remains the **only
+verified deploy path** for this branch until a real push-triggered publish is
+demonstrated with fresh GitHub/Cloudflare build evidence plus matching live
+runtime behavior.
+
+## Operator guidance for future auto-deploy checks
+
+If automatic deploys are wired later, do not trust a push alone. Verify all of
+these:
+
+1. A concrete automation record exists for the pushed commit:
+   - a GitHub Actions run, or
+   - a Cloudflare-side Git/Workers Builds log
+2. The public Worker passes the live checks in this doc:
+   - `HEAD /` returns `200`
+   - `GET /health` returns `200`
+3. The live landing page / bootstrap payload reflects the expected branch `HEAD`
+   features, not an older route manifest
+
+If any of those fail, assume automatic publish is not active and fall back to the
+manual Wrangler deploy sequence.
+
+## Disable and rollback notes
+
+- **Disable safely:** keep automatic deploys off until verified. If a future
+  GitHub Actions workflow is introduced, disable that workflow or remove its push
+  trigger. If a future Cloudflare-side Git integration is introduced, disconnect
+  the tracked branch/build in Cloudflare.
+- **Rollback safely:** redeploy a known-good commit through the manual Wrangler
+  path below. Do not rely on an unverified auto-publish system for rollback.
+- **Branch behavior note:** pushes to `plan-cloudflare-openclaw` currently push to
+  GitHub, but operators should not assume they update the public Worker without a
+  separate deploy verification.
+
 ## Deploy sequence
 
 ### 1. Validate the checked-in config
@@ -60,46 +117,54 @@ Protect the API with a bearer token:
 wrangler secret put APP_AUTH_TOKEN
 ```
 
-Workers AI is still useful for first-run usability and as the explicit safefallback path. The checked-in config expects the binding name `AI`, and itsconfigured `AI_MODEL` remains the Workers AI fallback model rather than theoperator-facing default.
+Workers AI is still useful for first-run usability and as the explicit safe
+fallback path. The checked-in config expects the binding name `AI`, and its
+configured `AI_MODEL` remains the Workers AI fallback model rather than the
+operator-facing default.
 
 ## Provider-key management notes
 
-External-provider `/api/key` management now uses the existing admin bearer tokenboundary plus D1-backed encrypted storage.
+External-provider `/api/key` management now uses the existing admin bearer token
+boundary plus D1-backed encrypted storage.
 
 Operational requirements:
 
 - set `APP_AUTH_TOKEN` before using `/api/key`
-- use `/api/key` for Gemini key set/update + validation in the protected appsurface
+- use `/api/key` for Gemini key set/update + validation in the protected app
+  surface
 - raw provider keys are never returned by the Worker; responses are masked-only
-- Worker-secret fallback still works if `GEMINI_API_KEY` is injected directly atdeploy time, but `/api/key` stores the operator-managed copy in D1 so laterrouting can read it without requiring a new config file shape
+- Worker-secret fallback still works if `GEMINI_API_KEY` is injected directly at
+  deploy time, but `/api/key` stores the operator-managed copy in D1 so later
+  routing can read it without requiring a new config file shape
 
 Current storage compromise:
 
-- the encrypted D1 provider-key store derives its AES-GCM key from`APP_AUTH_TOKEN`
-- if you rotate `APP_AUTH_TOKEN`, re-enter the provider key through `/api/key`afterward so the Worker can decrypt it again
+- the encrypted D1 provider-key store derives its AES-GCM key from
+  `APP_AUTH_TOKEN`
+- if you rotate `APP_AUTH_TOKEN`, re-enter the provider key through `/api/key`
+  afterward so the Worker can decrypt it again
 
-You do **not** need a new Wrangler binding for this task. The protected routereuses the existing D1 fact log and admin token secret.
+You do **not** need a new Wrangler binding for the current shipped key-management
+surface. The protected route reuses the existing D1 fact log and admin token
+secret.
 
 ## Telegram deployment notes
 
-Telegram support uses Worker secrets, not checked-in config, for both the bottoken and the webhook secret header.
+Telegram support uses Worker secrets, not checked-in config, for both the bot
+token and the webhook secret header.
 
-Important sequencing for this repo:
-
-- do **not** request or set the Telegram bot token during implementation-onlywork
-- request the rotated Telegram bot token from the user only when live Telegramdeployment starts
-- add the bot token and webhook secret through Cloudflare secrets at that time
-
-When that later deployment step begins, use:
+Use Worker secrets for Telegram configuration changes:
 
 ```sh
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
 
-The Worker expects Telegram webhooks at `POST /telegram/webhook` and validates`X-Telegram-Bot-Api-Secret-Token` when `TELEGRAM_WEBHOOK_SECRET` is present.
+The Worker expects Telegram webhooks at `POST /telegram/webhook` and validates
+`X-Telegram-Bot-Api-Secret-Token` when `TELEGRAM_WEBHOOK_SECRET` is present.
 
-This task does **not** include calling Telegram's live `setWebhook` API orrunning the final live webhook smoke test; keep that in the separate Telegramdeployment-verification follow-up.
+If you rotate either Telegram secret, update Telegram's webhook registration to
+keep the upstream secret header aligned with the Worker.
 
 ### 5. Generate the deploy config
 
@@ -115,7 +180,8 @@ This writes `.wrangler/deploy/wrangler.jsonc` with the real remote D1 UUID.
 npm run deploy:dry-run
 ```
 
-This command uses the generated deploy config and is the safest way to catch badbinding or config assumptions before a real deploy.
+This command uses the generated deploy config and is the safest way to catch bad
+binding or config assumptions before a real deploy.
 
 ### 7. Deploy
 
@@ -125,7 +191,8 @@ npm run deploy
 
 ## Current live posture
 
-The current public deployment at `https://aaronclaw.moneyacad.workers.dev` isworking. As of the current rollout, `GET /health` reports:
+The current public deployment at `https://aaronclaw.moneyacad.workers.dev` is
+working. As of the current rollout, `GET /health` reports:
 
 - `authMode: bearer-token`
 - `assistantRuntime: gemini`
@@ -137,7 +204,11 @@ The current public deployment at `https://aaronclaw.moneyacad.workers.dev` iswor
 - `toolAuditHistory: structured-session-and-hand-history`
 - `VECTOR_INDEX` mapped; `CONFIG_KV` and `ARCHIVE` not mounted
 
-That means the landing page and `/health` remain public, while `/api/*`(including `/api/model`, `/api/key`, `/api/skills`, and `/api/hands`) requirethe current bearer token. This is still a single-operator deployment posture;for stronger identity and policy enforcement, front it with Cloudflare Access.
+That means the landing page and `/health` remain public, while `/api/*`
+(including `/api/model`, `/api/key`, `/api/skills`, `/api/hands`, and
+`/api/improvements`) require the current bearer token. This is still a
+single-operator deployment posture; for stronger identity and policy
+enforcement, front it with Cloudflare Access.
 
 ## Auth and security posture
 
@@ -147,9 +218,12 @@ AaronClaw intentionally uses a minimal single-user auth model:
 - `GET /health` also stays public for status checks.
 - Only `/api/*` routes are protected when `APP_AUTH_TOKEN` is configured.
 - The browser UI stores the token in local browser storage for convenience.
-- Telegram ingress is separate from `/api/*` bearer auth; use`TELEGRAM_WEBHOOK_SECRET` so Telegram can authenticate without `APP_AUTH_TOKEN`.
+- Telegram ingress is separate from `/api/*` bearer auth; use
+  `TELEGRAM_WEBHOOK_SECRET` so Telegram can authenticate without
+  `APP_AUTH_TOKEN`.
 
-This is acceptable for personal dogfooding, but not a replacement for strongeruser identity, session management, or Cloudflare Access policies.
+This is acceptable for personal dogfooding, but not a replacement for stronger
+user identity, session management, or Cloudflare Access policies.
 
 ## Post-deploy operational checks
 
@@ -170,9 +244,12 @@ If `APP_AUTH_TOKEN` is configured, also check the protected operator surfaces:
 ```sh
 curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/skills
 curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/hands
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/improvements
 ```
 
-You should expect bundled skill readiness / declared tool policy data plus handlifecycle and recent audit history.
+You should expect bundled skill readiness / declared tool policy data, hand
+lifecycle plus recent audit history, and structured improvement candidates with
+evidence and lifecycle metadata.
 
 Then run one end-to-end session check:
 
@@ -191,7 +268,7 @@ That exact flow is what the current live deployment was verified against.
 | npm run deploy:prep fails immediately | AARONCLAW_D1_DATABASE_ID is missing or malformed | Export a real D1 UUID before running the command |
 | /api/* returns 401 | APP_AUTH_TOKEN is configured | Send Authorization: Bearer <APP_AUTH_TOKEN> or paste the token into the landing page |
 | /api/key returns 412 | APP_AUTH_TOKEN is not configured | Set APP_AUTH_TOKEN first; protected key storage derives encryption from that token |
-| /telegram/webhook returns 503 | TELEGRAM_BOT_TOKEN is not configured in Worker secrets | Add the bot token later during the Telegram deployment task with wrangler secret put TELEGRAM_BOT_TOKEN |
+| /telegram/webhook returns 503 | TELEGRAM_BOT_TOKEN is not configured in Worker secrets | Add TELEGRAM_BOT_TOKEN as a Worker secret with wrangler secret put TELEGRAM_BOT_TOKEN |
 | /telegram/webhook returns 401 | TELEGRAM_WEBHOOK_SECRET is configured but Telegram is not sending the expected header | Re-check the webhook setup step and the X-Telegram-Bot-Api-Secret-Token value used during Telegram webhook registration |
 | Chat replies come back as fallback | Gemini is unavailable and the fallback path also failed, or no runtime path is configured | Check /health for the default/active path plus fallback policy; verify /api/key, the Gemini validation state, and the AI binding / AI_MODEL fallback configuration |
 | POST /api/sessions/:id/chat returns 409 for a skill | The bundled skill is known but not ready yet | Inspect /api/skills and satisfy the missing required secret (for example, configure Gemini key material for gemini-review); validation status remains a separate provider-health signal in /api/key |
