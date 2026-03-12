@@ -1,27 +1,4 @@
-# Dependencies
 node_modules/
-.pnpm-store/
-
-# Build outputs
+.wrangler/
+coverage/
 dist/
-build/
-out/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-npm-debug.log*

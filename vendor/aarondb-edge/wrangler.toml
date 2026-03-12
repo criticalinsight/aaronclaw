@@ -1,0 +1,34 @@
+name = "aarondb-edge"
+main = "src/index.mjs"
+compatibility_date = "2024-03-08"
+
+[vars]
+ENVIRONMENT = "development"
+
+[[durable_objects.bindings]]
+name = "AARONDB_STATE"
+class_name = "AaronDBState"
+
+[[kv_namespaces]]
+binding = "CONFIG_KV"
+id = "18d069c7c513455998a652e634d19450"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "aarondb-log"
+database_id = "611999cf-c830-41c9-aede-796af91eb01c"
+
+# [[r2_buckets]]
+# binding = "ARCHIVE"
+# bucket_name = "aarondb-archive"
+
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTOR_INDEX"
+index_name = "aarondb-vectors"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AaronDBState"]

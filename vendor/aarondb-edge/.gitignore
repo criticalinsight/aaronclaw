@@ -1,0 +1,16 @@
+# Gleam
+*.beam
+*.ez
+/build
+erl_crash.dump
+
+# Node/Bun
+node_modules/
+bun.lockb
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# OS
+.DS_Store
