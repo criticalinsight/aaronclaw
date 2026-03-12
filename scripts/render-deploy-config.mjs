@@ -1,10 +1,12 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const placeholderId = "00000000-0000-0000-0000-000000000000";
 const configPath = resolve(process.cwd(), "wrangler.jsonc");
 const outputDir = resolve(process.cwd(), ".wrangler", "deploy");
 const outputPath = resolve(outputDir, "wrangler.jsonc");
+const migrationsSourceDir = resolve(process.cwd(), "migrations");
+const migrationsOutputDir = resolve(outputDir, "migrations");
 
 const databaseId = process.env.AARONCLAW_D1_DATABASE_ID?.trim();
 const databaseName = process.env.AARONCLAW_D1_DATABASE_NAME?.trim();
@@ -55,10 +57,18 @@ if (!includeVectorize) {
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(outputPath, configText);
 
+if (existsSync(migrationsSourceDir)) {
+  rmSync(migrationsOutputDir, { recursive: true, force: true });
+  cpSync(migrationsSourceDir, migrationsOutputDir, { recursive: true });
+}
+
 console.log(`Generated deploy config at ${outputPath}`);
 console.log(`- database_id: ${databaseId}`);
 console.log(
   `- database_name: ${databaseName || "aaronclaw-aarondb"}`
+);
+console.log(
+  `- migrations: ${existsSync(migrationsSourceDir) ? "copied" : "not present"}`
 );
 console.log(
   `- vectorize: ${includeVectorize ? "included" : "omitted (D1 compatibility fallback)"}`

@@ -30,7 +30,7 @@ What is verified today:
 What is **not** verified today:
 
 - the committed branch state does not yet prove an active checked-in auto-deploy workflow for the chosen branch
-- the GitHub-to-Cloudflare credential/environment mapping may still need to be provisioned before the workflow can run successfully
+- the GitHub `production` environment exists, but automatic deploys still need a least-privilege `CLOUDFLARE_API_TOKEN` added there before the workflow can run successfully
 - this task has not yet observed a successful GitHub Actions deploy run for the chosen branch
 - recent pushes to `plan-cloudflare-openclaw` did **not** prove automatic publish,
   because the public landing page and `/health` still expose the older operator
@@ -43,6 +43,27 @@ Cloudflare Git integration. But the Wrangler path below remains the **only
 verified deploy path** for this branch until a real push-triggered publish is
 demonstrated with fresh GitHub/Cloudflare build evidence plus matching live
 runtime behavior.
+
+## GitHub production environment contract
+
+Rich Hickey warning: keep production deploy credentials simple, explicit, and
+least-privileged.
+
+- GitHub environment: `production`
+- Allowed deploy branch: `plan-cloudflare-openclaw`
+- Required **environment secrets**:
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `AARONCLAW_D1_DATABASE_ID`
+- Optional **environment variables**:
+  - `AARONCLAW_D1_DATABASE_NAME` (defaults to `aaronclaw-aarondb`)
+  - `AARONCLAW_DEPLOY_WITH_VECTORIZE` (set only after verifying the intended index binding for automated deploys)
+
+Do **not** store a broad Cloudflare global API key in GitHub Actions for this
+repo. The manual deploy verification used operator-supplied credentials only to
+verify the target account and public Worker. The automation path should use a
+scoped Cloudflare API token created outside the repo and then stored as the
+`production` environment secret `CLOUDFLARE_API_TOKEN`.
 
 ## Operator guidance for future auto-deploy checks
 
