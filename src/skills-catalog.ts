@@ -348,5 +348,17 @@ export const bundledSkillManifests: SkillManifest[] = [
     requiredSecrets: [],
     memoryScope: "session-only",
     promptInstructions: ["Tighten prompt context for higher impact."]
+  },
+  {
+    id: "wrangler-orchestration",
+    label: "Wrangler orchestration",
+    description: "Expertise in managing Cloudflare deployments, generating wrangler.toml, and handling environment secrets.",
+    manifestVersion: 1,
+    installScope: "bundled-local-only",
+    runtime: "cloudflare-worker",
+    declaredTools: ["session-recall", "wrangler-orchestration"],
+    requiredSecrets: [{ id: "cloudflare-api-token", label: "Cloudflare API Token", provider: "cloudflare" }],
+    memoryScope: "session-only",
+    promptInstructions: ["Generate correctly tuned wrangler.toml files.", "Manage secrets with extreme care."]
   }
 ];

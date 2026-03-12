@@ -23,26 +23,32 @@ export type BundledHandImplementation =
   | "dependency-drifter"
   | "secret-rotation-check"
   | "audit-log-compactor"
-  | "schema-integrity-checker"
-  | "token-budget-enforcer"
+  | "fact-integrity-checker"
+  | "substrate-migration-pro"
+  | "skill-prompt-optimizer"
+  | "wrangler-orchestration"
   | "prompt-injection-watchdog"
   | "reproducibility-guard"
   | "context-optimizer"
   | "sentiment-drift-watch"
   | "capability-mapper"
   | "knowledge-vault-pruner"
-  | "compliance-sweeper";
+  | "compliance-sweeper"
+  | "token-budget-enforcer"
+  | "github-coordinator";
+
+// Removed duplicate BundledHandImplementation type
 
 export interface BundledHandDefinition {
   readonly id: string;
   readonly label: string;
   readonly description: string;
-  readonly runtime: "cloudflare-cron";
+  readonly runtime: "cloudflare-cron" | "cloudflare-native";
   readonly scheduleCrons: readonly string[];
   readonly implementation: BundledHandImplementation;
 }
 
-export const bundledHandDefinitions = [
+export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
   {
     id: "scheduled-maintenance",
     label: "Scheduled maintenance hand",
@@ -128,6 +134,14 @@ export const bundledHandDefinitions = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "daily-briefing-generator"
+  },
+  {
+    id: "github-coordinator",
+    label: "GitHub Coordinator",
+    description: "Manages repository creation, branch strategies, and PR generation for self-spawning apps.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["0 0 * * *"],
+    implementation: "github-coordinator"
   },
   {
     id: "error-cluster-detect",
@@ -231,7 +245,7 @@ export const bundledHandDefinitions = [
     description: "Validates D1 and AaronDB schema parity.",
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
-    implementation: "schema-integrity-checker"
+    implementation: "fact-integrity-checker"
   },
   {
     id: "token-budget-enforcer",

@@ -1174,6 +1174,15 @@ function buildToolEventEvidence(event: ToolEvent, summary: string): ImprovementE
   };
 }
 
+async function runGithubCoordinator(env: Pick<Env, "GEMINI_API_KEY" | "AARONDB">): Promise<JsonObject> {
+  // Mock implementation for Phase 1 Scaffolding
+  return {
+    action: "coordinated",
+    timestamp: new Date().toISOString(),
+    status: "awaiting-operator-signal"
+  };
+}
+
 function trimText(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
 }

@@ -35,7 +35,8 @@ export type SkillToolId =
   | "shadow-eval-coordinator"
   | "fact-integrity-checker"
   | "substrate-migration-pro"
-  | "skill-prompt-optimizer";
+  | "skill-prompt-optimizer"
+  | "wrangler-orchestration";
 export type ToolId =
   | SkillToolId
   | "provider-key-management"
@@ -50,6 +51,7 @@ export type ToolId =
   | "morning-briefing"
   | "ttl-garbage-collector"
   | "orphan-fact-cleanup"
+  | "github-coordinator"
   | "vector-index-reconciler"
   | "daily-briefing-generator"
   | "error-cluster-detect"
@@ -621,6 +623,22 @@ const TOOL_DEFINITIONS = {
     capability: "skill.optimize.prompts",
     policy: "automatic-safe",
     declarationMode: "skill-declared"
+  },
+  "wrangler-orchestration": {
+    id: "wrangler-orchestration",
+    label: "Wrangler orchestration",
+    description: "Manages Cloudflare deployments and secrets.",
+    capability: "skill.manage.cloudflare-deploy",
+    policy: "admin-sensitive",
+    declarationMode: "skill-declared"
+  },
+  "github-coordinator": {
+    id: "github-coordinator",
+    label: "GitHub Coordinator",
+    description: "Manages repository and PR lifecycle.",
+    capability: "hand.manage.github",
+    policy: "operator-protected",
+    declarationMode: "core-runtime"
   }
 } as const satisfies Record<ToolId, ToolDefinition>;
 
@@ -656,7 +674,8 @@ const SKILL_TOOL_IDS = new Set<SkillToolId>([
   "shadow-eval-coordinator",
   "fact-integrity-checker",
   "substrate-migration-pro",
-  "skill-prompt-optimizer"
+  "skill-prompt-optimizer",
+  "wrangler-orchestration"
 ]);
 
 export function getToolDefinition(toolId: string): ToolDefinition | null {

@@ -33,7 +33,7 @@ const INSERT_PROVIDER_KEY_SQL = `
 const GEMINI_VALIDATION_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1";
 const ENCRYPTION_CONTEXT = "aaronclaw:provider-key:v1";
 
-export type ExternalProvider = "gemini";
+export type ExternalProvider = "gemini" | "cloudflare";
 export type ProviderKeySource = "none" | "protected-store" | "worker-secret";
 export type ProviderKeyValidationStatus =
   | "not-configured"

@@ -9,7 +9,7 @@ export type SkillMemoryScope = "session-only" | "session-and-knowledge-vault";
 export interface SkillSecretManifest {
   id: string;
   label: string;
-  provider: "gemini";
+  provider: "gemini" | "cloudflare";
 }
 
 export interface SkillManifest {
@@ -34,7 +34,7 @@ export interface BundledSkillCatalogEntry {
 export interface ResolvedSkillSecretRequirement {
   id: string;
   label: string;
-  source: "provider-key:gemini";
+  source: "provider-key:gemini" | "provider-key:cloudflare";
   configured: boolean;
   validationStatus: ProviderKeyValidationStatus;
   detail: string | null;
