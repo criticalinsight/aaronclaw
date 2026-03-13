@@ -12,10 +12,18 @@ import {
 } from "./reflection-engine";
 import { runScheduledDocsDriftReview, type DocsDriftFinding } from "./docs-drift";
 import { runProviderHealthWatchdog, type ProviderHealthFinding } from "./provider-health-watchdog";
+import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
+import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
 import { AaronDbEdgeSessionRepository, type JsonObject, type ToolEvent } from "./session-state";
 import { buildToolAuditRecord } from "./tool-policy";
 
 import { bundledHandDefinitions, type BundledHandDefinition } from "./hands-catalog";
+import { runGithubCoordinator as githubCoordinatorImpl } from "./github-coordinator";
+import { generateDocsSiteContent } from "./docs-generator";
+import { createGithubRepository, pushFilesToGithub } from "./github-coordinator";
+import { createCloudflareWorker, putCloudflareSecret, deploySimpleSite } from "./wrangler-orchestration";
+import { readProviderKeyFromEnv } from "./provider-key-store";
+import { generateWebsiteContent } from "./website-generator";
 
 const HAND_SESSION_PREFIX = "hand:";
 const HAND_LIFECYCLE_TOOL = "hand-lifecycle";
@@ -118,6 +126,43 @@ export interface BundledHandState {
   recentAudit: HandAuditRecord[];
 }
 
+export async function triggerBundledHandRunManual(input: {
+  env: Pick<
+    Env,
+    | "AARONDB"
+    | "AI"
+    | "AI_MODEL"
+    | "APP_AUTH_TOKEN"
+    | "GEMINI_API_KEY"
+    | "GITHUB_TOKEN"
+    | "CLOUDFLARE_API_TOKEN"
+    | "CLOUDFLARE_EMAIL"
+    | "CLOUDFLARE_API_KEY"
+    | "CLOUDFLARE_ACCOUNT_ID"
+    | "TELEGRAM_BOT_TOKEN"
+    | "TELEGRAM_WEBHOOK_SECRET"
+  >;
+  handId: string;
+  input?: any;
+}): Promise<BundledHandState | null> {
+  const definition = getBundledHandDefinition(input.handId);
+
+  if (!definition) {
+    return null;
+  }
+
+  const timestamp = new Date().toISOString();
+  await executeBundledHandRun({
+    env: input.env,
+    definition,
+    cron: "manual",
+    timestamp,
+    input: input.input
+  });
+
+  return readBundledHandState({ env: input.env, handId: definition.id });
+}
+
 export async function listBundledHands(input: {
   env: Pick<Env, "AARONDB">;
 }): Promise<BundledHandState[]> {
@@ -197,6 +242,11 @@ export async function runScheduledHands(input: {
     | "AI_MODEL"
     | "APP_AUTH_TOKEN"
     | "GEMINI_API_KEY"
+    | "GITHUB_TOKEN"
+    | "CLOUDFLARE_API_TOKEN"
+    | "CLOUDFLARE_EMAIL"
+    | "CLOUDFLARE_API_KEY"
+    | "CLOUDFLARE_ACCOUNT_ID"
     | "TELEGRAM_BOT_TOKEN"
     | "TELEGRAM_WEBHOOK_SECRET"
   >;
@@ -266,12 +316,18 @@ async function executeBundledHandRun(input: {
     | "AI_MODEL"
     | "APP_AUTH_TOKEN"
     | "GEMINI_API_KEY"
+    | "GITHUB_TOKEN"
+    | "CLOUDFLARE_API_TOKEN"
+    | "CLOUDFLARE_EMAIL"
+    | "CLOUDFLARE_API_KEY"
+    | "CLOUDFLARE_ACCOUNT_ID"
     | "TELEGRAM_BOT_TOKEN"
     | "TELEGRAM_WEBHOOK_SECRET"
   >;
   definition: BundledHandDefinition;
   cron: string;
   timestamp: string;
+  input?: any;
 }): Promise<void> {
   const repository = await ensureHandRepository(input.env, input.definition, input.timestamp);
 
@@ -590,6 +646,61 @@ async function executeBundledHandRun(input: {
       return;
     }
 
+    if (input.definition.implementation === "github-coordinator") {
+      const result = await runGithubCoordinator(input.env);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} coordinated development lifecycle.`,
+        metadata: {
+          action: "coordinated",
+          handId: input.definition.id,
+          status: "succeeded",
+          result,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} coordinated successfully.`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "docs-factory") {
+      const result = await runDocsFactory({
+        env: input.env,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: result.summary,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          status: result.success ? "succeeded" : "failed",
+          error: result.error ?? null,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: result.success ? "succeeded" : "failed",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: result.summary
+          })
+        }
+      });
+      return;
+    }
+
     if (input.definition.implementation === "daily-briefing-generator") {
       const briefing = await runDailyBriefingGenerator(input.env);
       const reviewedSessionIds = (briefing.reviewedSessionIds as string[]) ?? [];
@@ -612,6 +723,37 @@ async function executeBundledHandRun(input: {
             timestamp: input.timestamp,
             handId: input.definition.id,
             detail: `${input.definition.label} compiled daily briefing successfully.`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "website-factory") {
+      await runWebsiteFactory(input.env, { 
+        input: { 
+            prompt: "A minimalist premium website", // Default
+            ...input.input
+        },
+        sessionId: input.input?.sessionId
+      });
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} processed website generation request.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} completed website synthesis.`
           })
         }
       });
@@ -1174,13 +1316,8 @@ function buildToolEventEvidence(event: ToolEvent, summary: string): ImprovementE
   };
 }
 
-async function runGithubCoordinator(env: Pick<Env, "GEMINI_API_KEY" | "AARONDB">): Promise<JsonObject> {
-  // Mock implementation for Phase 1 Scaffolding
-  return {
-    action: "coordinated",
-    timestamp: new Date().toISOString(),
-    status: "awaiting-operator-signal"
-  };
+async function runGithubCoordinator(env: Pick<Env, "GEMINI_API_KEY" | "AARONDB" | "GITHUB_TOKEN">): Promise<JsonObject> {
+  return githubCoordinatorImpl(env);
 }
 
 function trimText(value: string, maxLength: number): string {
@@ -1244,4 +1381,156 @@ async function runDailyBriefingGenerator(env: Pick<Env, "AARONDB">): Promise<Jso
     ...result,
     success: true
   };
+}
+async function runDocsFactory(input: {
+  env: Pick<
+    Env,
+    | "AARONDB"
+    | "GEMINI_API_KEY"
+    | "GITHUB_TOKEN"
+    | "CLOUDFLARE_API_TOKEN"
+    | "CLOUDFLARE_EMAIL"
+    | "CLOUDFLARE_API_KEY"
+    | "CLOUDFLARE_ACCOUNT_ID"
+  >;
+  cron: string | null;
+  timestamp: string;
+}): Promise<{ success: boolean; summary: string; error?: string }> {
+  try {
+    const githubToken = readProviderKeyFromEnv(input.env, "github");
+    let githubPushStatus = "skipped (no token)";
+
+    // 1. Generate Schematic Content
+    const changes = await generateDocsSiteContent();
+
+    // 2. Synthesize a minimalist Docs Serving Worker
+    // 🧙🏾‍♂️ Rich Hickey: Simplify transport. A single worker serving a content map.
+    const fileMap = JSON.stringify(Object.fromEntries(changes.map(c => [c.path, c.content])));
+    const workerScript = `
+      const FILES = ${fileMap};
+      addEventListener('fetch', event => {
+        event.respondWith(handleRequest(event.request));
+      });
+      async function handleRequest(request) {
+        const url = new URL(request.url);
+        let path = url.pathname.slice(1) || 'index.html';
+        const content = FILES[path];
+        if (!content) return new Response('Not Found', { status: 404 });
+        const type = path.endsWith('.html') ? 'text/html' : path.endsWith('.css') ? 'text/css' : 'text/plain';
+        return new Response(content, { headers: { 'content-type': type } });
+      }
+    `;
+
+    // 3. Push to GitHub (Optional)
+    const repoName = "aaronclaw-docs";
+    if (githubToken) {
+      try {
+        try {
+          await createGithubRepository(githubToken, {
+            owner: "criticalinsight",
+            repo: repoName,
+            description: "Schematic-styled documentation for AaronClaw. Autogenerated.",
+            private: false
+          });
+        } catch (e) {
+          // Ignore if repo already exists
+        }
+
+        await pushFilesToGithub(githubToken, "criticalinsight", repoName, "main", [
+          ...changes,
+          { path: "worker.js", content: workerScript }
+        ], "Docs Factory: update truth");
+        githubPushStatus = "pushed";
+      } catch (error) {
+        console.warn("Docs Factory: GitHub push failed, proceeding to Cloudflare:", error);
+        githubPushStatus = `failed (${error instanceof Error ? error.message : String(error)})`;
+      }
+    } else {
+      console.log("Docs Factory: skipping GitHub push (AARONCLAW_GITHUB_TOKEN not configured).");
+    }
+
+    // 4. Deploy to Cloudflare
+    const cfToken = input.env.CLOUDFLARE_API_TOKEN;
+    const cfEmail = input.env.CLOUDFLARE_EMAIL;
+    const cfKey = input.env.CLOUDFLARE_API_KEY;
+    const cfAccountId = input.env.CLOUDFLARE_ACCOUNT_ID;
+
+    let cfDeployStatus = "skipped (missing credentials)";
+    if (cfAccountId && (cfToken || (cfEmail && cfKey))) {
+      await createCloudflareWorker(
+        { token: cfToken, email: cfEmail, key: cfKey },
+        cfAccountId,
+        {
+          name: repoName,
+          main: "worker.js",
+          compatibility_date: "2024-03-12"
+        },
+        workerScript
+      );
+      cfDeployStatus = "deployed";
+    }
+
+    return {
+      success: true,
+      summary: `Docs Factory completed: GitHub (${githubPushStatus}), Cloudflare (${cfDeployStatus}). Generated ${changes.length} file(s).`
+    };
+  } catch (error) {
+    console.error("Docs Factory failed:", error);
+    return {
+      success: false,
+      summary: `Docs Factory failed: ${error instanceof Error ? error.message : String(error)}`,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+/**
+ * 🧙🏾‍♂️ Rich Hickey: Decoupling intent (prompt) from realization (worker).
+ */
+async function runWebsiteFactory(
+  env: Pick<
+    Env,
+    | "AI"
+    | "AI_MODEL"
+    | "GEMINI_API_KEY"
+    | "CLOUDFLARE_API_TOKEN"
+    | "CLOUDFLARE_EMAIL"
+    | "CLOUDFLARE_API_KEY"
+    | "CLOUDFLARE_ACCOUNT_ID"
+    | "AARONDB"
+  >,
+  options: { input?: { prompt?: string; name?: string }; sessionId?: string; onProgress?: (ev: any) => void } = {}
+): Promise<void> {
+  const prompt = options.input?.prompt;
+  if (typeof prompt !== "string") {
+    throw new Error("website-factory requires a prompt string in options.input.prompt");
+  }
+
+  const name = options.input?.name || `site-${Math.random().toString(36).slice(2, 8)}`;
+  
+  console.log(`Starting Website Factory for prompt: "${prompt}" (Target name: ${name})`);
+
+  // 1. Synthesize content
+  const files = await generateWebsiteContent(env, prompt, options.sessionId);
+  
+  // 2. Map files to format expected by deploySimpleSite
+  const sitesFiles = files.map(f => ({ path: f.path, content: f.content }));
+
+  // 3. Deploy
+  const credentials = {
+    token: env.CLOUDFLARE_API_TOKEN,
+    email: env.CLOUDFLARE_EMAIL,
+    key: env.CLOUDFLARE_API_KEY
+  };
+  const accountId = env.CLOUDFLARE_ACCOUNT_ID;
+
+  if (!accountId) {
+    throw new Error("CLOUDFLARE_ACCOUNT_ID is required for website-factory deployment.");
+  }
+
+  const deployment = await deploySimpleSite(credentials, accountId, name, sitesFiles);
+  
+  console.log(`Website Factory deployment complete: ${deployment.url || `https://${name}.workers.dev`}`);
+  
+  // Tag the run (optional as handled by appendToolEvent in executeBundledHandRun)
 }

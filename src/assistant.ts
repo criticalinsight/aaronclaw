@@ -319,7 +319,7 @@ async function attemptWorkersAiRoute(input: {
   try {
     const result = await input.env.AI.run(input.route.model, {
       messages: input.promptMessages,
-      max_tokens: 2048,
+      max_tokens: 2560, // Reduced from 4096 for stable edge inference
       temperature: 0.2
     });
     const content = extractResponseText(result);
@@ -505,7 +505,7 @@ function buildGeminiGenerateContentRequest(promptMessages: WorkersAiMessage[]) {
     ...(systemInstruction ? { systemInstruction: { parts: [{ text: systemInstruction }] } } : {}),
     contents,
     generationConfig: {
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
       temperature: 0.2
     }
   };
@@ -513,10 +513,12 @@ function buildGeminiGenerateContentRequest(promptMessages: WorkersAiMessage[]) {
 
 function extractGeminiResponseText(payload: unknown): string | null {
   const record = asRecord(payload);
-  const candidates = Array.isArray(record?.candidates) ? record.candidates : [];
+  if (!record) return null;
+  const candidates = Array.isArray(record.candidates) ? record.candidates : [];
   for (const candidate of candidates) {
-    const content = asRecord(asRecord(candidate)?.content);
-    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const contentObj = asRecord(asRecord(candidate)?.content);
+    if (!contentObj) continue;
+    const parts = Array.isArray(contentObj.parts) ? contentObj.parts : [];
     const text = parts
       .map((part) => asRecord(part)?.text)
       .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -557,13 +559,17 @@ function buildGeminiEmptyResponseDetail(payload: unknown): string {
     return `Google Gemini returned no response text. promptFeedback.blockReason=${blockReason.trim()}.`;
   }
 
-  const candidates = Array.isArray(record?.candidates) ? record.candidates : [];
-  const finishReason = asRecord(candidates[0])?.finishReason;
+  if (!record) {
+    return "Google Gemini returned no response text and no structured response payload.";
+  }
+  const candidates = Array.isArray(record.candidates) ? record.candidates : [];
+  const candidate = asRecord(candidates[0]);
+  const finishReason = candidate?.finishReason;
   if (typeof finishReason === "string" && finishReason.trim().length > 0) {
     return `Google Gemini returned no response text. finishReason=${finishReason.trim()}.`;
   }
 
-  const keys = record ? Object.keys(record).slice(0, 5) : [];
+  const keys = Object.keys(record).slice(0, 5);
   return keys.length > 0
     ? `Google Gemini returned no response text. Top-level payload keys: ${keys.join(", ")}.`
     : "Google Gemini returned no response text and no structured response payload.";

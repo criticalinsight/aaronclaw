@@ -112,6 +112,24 @@ from the repo right now. Do **not** assume a push to `plan-cloudflare-openclaw`
 updates `https://aaronclaw.moneyacad.workers.dev` until automatic publish is
 proven with live evidence.
 
+## Philosophical Positioning: AaronClaw vs. OpenClaw 🧙🏾‍♂️
+
+AaronClaw is a specialized **Cloudflare-native Software Factory**, while OpenClaw is a broader **Autonomous Personal Assistant**. The fundamental architectural and philosophical differences are built on Rich Hickey's principles:
+
+| Capability | AaronClaw (Edge Factory) | OpenClaw (Local Assistant) |
+| :--- | :--- | :--- |
+| **Logic** | **De-complected**: Service-oriented edge functions. | **Complected**: Deeply tied to the host OS / Docker. |
+| **State** | **Value-Oriented**: Immutable D1 fact streams. | **Place-Oriented**: Mutable file-based memory. |
+| **Change** | **Provenance**: Validated via Reflection & PRs. | **Mutation**: Direct, opaque self-updates. |
+| **Goal** | **Production Synthesis**: High-fidelity sites. | **General Agency**: Broad personal automation. |
+
+### Why not just use OpenClaw?
+Rich Hickey asks: *"Is the increased complexity worth the utility?"* OpenClaw treats AI agents as an infrastructure problem (the "Agent OS"). AaronClaw treats AI agents as a **Function** that transforms intent into high-fidelity production values at the edge.
+
+By de-complecting deployment from development, AaronClaw provides a "Truth-at-the-Edge" that local-first models cannot match.
+
+---
+
 ## Runtime summary
 
 - `GET /` serves the browser UI.

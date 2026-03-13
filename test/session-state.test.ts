@@ -320,7 +320,7 @@ function createEnv(options: {
   const database = new FakeD1Database();
   const env = {
     AARONDB: database as unknown as D1Database,
-    AI: options.aiMode ? new FakeAiBinding(options.aiMode) : undefined,
+    AI: options.aiMode ? new FakeAiBinding(options.aiMode) : (undefined as any),
     AI_MODEL: "@cf/meta/test-model",
     APP_AUTH_TOKEN: options.appAuthToken,
     GEMINI_API_KEY: options.geminiApiKey,
@@ -328,7 +328,8 @@ function createEnv(options: {
     TELEGRAM_WEBHOOK_SECRET: options.telegramWebhookSecret,
     VECTOR_INDEX: options.vectorizeMode
       ? (new FakeVectorizeIndex(options.vectorizeMode) as unknown as VectorizeIndex)
-      : undefined
+      : undefined,
+    SESSION_RUNTIME: undefined as any
   } as Env & {
     SESSION_RUNTIME: DurableObjectNamespace & FakeSessionRuntimeNamespace;
   };

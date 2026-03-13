@@ -117,7 +117,7 @@ export function parseSessionRoute(pathname: string): {
 
 export function parseHandRoute(pathname: string): {
   handId: string | null;
-  action: "list" | "detail" | "activate" | "pause";
+  action: "list" | "detail" | "activate" | "pause" | "run";
 } | null {
   const parts = pathname.split("/").filter(Boolean);
 
@@ -143,7 +143,10 @@ export function parseHandRoute(pathname: string): {
     };
   }
 
-  if (parts.length === 4 && (parts[3] === "activate" || parts[3] === "pause")) {
+  if (
+    parts.length === 4 &&
+    (parts[3] === "activate" || parts[3] === "pause" || parts[3] === "run")
+  ) {
     return {
       handId: parts[2],
       action: parts[3]

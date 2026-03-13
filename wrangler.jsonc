@@ -10,7 +10,7 @@
     "binding": "AI"
   },
   "vars": {
-    "AI_MODEL": "@cf/meta/llama-3.1-8b-instruct"
+    "AI_MODEL": "@cf/nvidia/nemotron-3-120b-a12b"
   },
   "durable_objects": {
     "bindings": [

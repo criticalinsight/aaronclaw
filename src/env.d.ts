@@ -18,14 +18,20 @@ interface Env {
   AARONDB: D1Database;
   AARONDB_STATE?: DurableObjectNamespace;
   ARCHIVE?: R2Bucket;
-  GEMINI_API_KEY?: string;
-  AI?: WorkersAiBinding;
-  AI_MODEL?: string;
-  APP_AUTH_TOKEN?: string;
+  GEMINI_API_KEY: string;
+  AI: WorkersAiBinding;
+  AI_MODEL: string;
+  APP_AUTH_TOKEN: string;
   CONFIG_KV?: KVNamespace;
   DB?: D1Database;
   SESSION_RUNTIME: DurableObjectNamespace;
   TELEGRAM_BOT_TOKEN?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  GITHUB_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_EMAIL?: string;
+  CLOUDFLARE_API_KEY?: string;
+  RECOVERY_TRIGGER_TOKEN?: string;
   VECTOR_INDEX?: VectorizeIndex;
 }

@@ -42,6 +42,7 @@ export type ToolId =
   | "provider-key-management"
   | "hand-lifecycle"
   | "hand-run"
+  | "hand-run-manual"
   | "improvement-candidate-review"
   | "improvement-proposal-review"
   | "improvement-shadow-evaluation"
@@ -165,6 +166,14 @@ const TOOL_DEFINITIONS = {
     capability: "hand.execute.scheduled",
     policy: "scheduled-safe",
     declarationMode: "scheduled"
+  },
+  "hand-run-manual": {
+    id: "hand-run-manual",
+    label: "Manual hand execution",
+    description: "Executes a bundled hand manually and records the result.",
+    capability: "hand.execute.manual",
+    policy: "operator-protected",
+    declarationMode: "operator-only"
   },
   "improvement-candidate-review": {
     id: "improvement-candidate-review",

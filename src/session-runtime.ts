@@ -11,6 +11,7 @@ import {
 } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
 import { listBundledHands } from "./hands-runtime";
+import { orchestrateCloudflareDeployment as wranglerOrchestrationImpl } from "./wrangler-orchestration";
 import { queryKnowledgeVault } from "./knowledge-vault";
 import { resolveModelSelection, type ResolvedModelSelection } from "./model-registry";
 import { readPersistedModelSelection } from "./model-selection-store";
@@ -650,7 +651,7 @@ async function buildSkillDiagnosticContext(input: {
   }
 
   if (isSkillToolAllowed("wrangler-orchestration", input.skill.declaredTools)) {
-    const analysis = orchestrateCloudflareDeployment();
+    const analysis = await orchestrateCloudflareDeployment();
     promptAdditions.push(analysis.message);
     toolAuditTrail.push(
       buildToolAuditRecord({
@@ -865,16 +866,8 @@ function mergeMetadata(base: JsonObject | undefined, extra: JsonObject | null): 
   };
 }
 
-function orchestrateCloudflareDeployment(): {
-  message: string;
-  deploymentCount: number;
-  secretCount: number;
-} {
-  return {
-    message: "Cloudflare deployment orchestrated via Wrangler.",
-    deploymentCount: 1,
-    secretCount: 1
-  };
+function orchestrateCloudflareDeployment() {
+  return wranglerOrchestrationImpl();
 }
 
 function analyzeSimplicity(session: SessionRecord): { message: string; findingCount: number } {

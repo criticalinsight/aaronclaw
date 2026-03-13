@@ -1,0 +1,8 @@
+name = "aaronclaw-tmp"
+main = "src/index.ts"
+compatibility_date = "2026-03-09"
+
+[[d1_databases]]
+binding = "AARONDB"
+database_name = "aaronclaw-aarondb"
+database_id = "b17b6ca1-f088-4b1b-a072-09bea60f603b"

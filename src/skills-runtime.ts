@@ -47,10 +47,13 @@ export interface ResolvedSkillManifest extends Omit<SkillManifest, "requiredSecr
   missingSecretIds: string[];
 }
 
-export function getBundledSkillCatalog(): BundledSkillCatalogEntry[] {
+export function getBundledSkillCatalog(): any[] {
   return bundledSkillManifests.map((manifest) => ({
     id: manifest.id,
     label: manifest.label,
+    description: manifest.description,
+    runtime: manifest.runtime,
+    declaredTools: manifest.declaredTools,
     requiredSecretIds: manifest.requiredSecrets.map((secret) => secret.id)
   }));
 }

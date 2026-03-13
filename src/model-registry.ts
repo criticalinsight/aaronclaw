@@ -1,4 +1,4 @@
-export const DEFAULT_WORKERS_AI_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+export const DEFAULT_WORKERS_AI_MODEL = "@cf/nvidia/nemotron-3-120b-a12b";
 export const REQUESTED_GEMINI_MODEL_INTENT = "gemini-3.1-pro-flash-preview";
 export const DEFAULT_GEMINI_MODEL = "gemini-3.1-pro-preview";
 

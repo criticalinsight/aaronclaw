@@ -35,6 +35,8 @@ export type BundledHandImplementation =
   | "knowledge-vault-pruner"
   | "compliance-sweeper"
   | "token-budget-enforcer"
+  | "docs-factory"
+  | "website-factory"
   | "github-coordinator";
 
 // Removed duplicate BundledHandImplementation type
@@ -142,6 +144,14 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: ["0 0 * * *"],
     implementation: "github-coordinator"
+  },
+  {
+    id: "docs-factory",
+    label: "Documentation Factory",
+    description: "Autonomously generates and deploys the Schematic-styled docs site to GitHub and Cloudflare by extracting truth from the runtime catalogs.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["0 0 * * *"],
+    implementation: "docs-factory"
   },
   {
     id: "error-cluster-detect",
@@ -310,5 +320,13 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "compliance-sweeper"
+  },
+  {
+    id: "website-factory",
+    label: "Website Factory",
+    description: "Synthesizes and deploys websites based on natural language prompts received from Telegram or other interfaces.",
+    runtime: "cloudflare-native",
+    scheduleCrons: [],
+    implementation: "website-factory"
   }
 ] as const satisfies readonly BundledHandDefinition[];

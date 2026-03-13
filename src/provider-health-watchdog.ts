@@ -39,6 +39,7 @@ export async function runProviderHealthWatchdog(input: {
     | "AI_MODEL"
     | "APP_AUTH_TOKEN"
     | "GEMINI_API_KEY"
+    | "GITHUB_TOKEN"
     | "TELEGRAM_BOT_TOKEN"
     | "TELEGRAM_WEBHOOK_SECRET"
   >;
@@ -50,6 +51,11 @@ export async function runProviderHealthWatchdog(input: {
     env: input.env,
     database: input.env.AARONDB,
     provider: "gemini"
+  });
+  const githubKeyStatus = await readProviderKeyStatus({
+    env: input.env,
+    database: input.env.AARONDB,
+    provider: "github"
   });
   const persistedModelId = await readPersistedModelSelection(input.env.AARONDB);
   const selection = resolveModelSelection(input.env, persistedModelId, {
@@ -63,7 +69,8 @@ export async function runProviderHealthWatchdog(input: {
   const telegramWebhookProtected = Boolean(input.env.TELEGRAM_WEBHOOK_SECRET?.trim());
 
   const findings = [
-    buildProviderKeyFinding(geminiKeyStatus),
+    buildProviderKeyFinding("gemini", geminiKeyStatus),
+    buildProviderKeyFinding("github", githubKeyStatus),
     buildModelSelectionFinding({
       persistedModelId,
       requestedModelId: selection.requestedModelId,
@@ -115,13 +122,19 @@ export async function runProviderHealthWatchdog(input: {
   return result;
 }
 
-function buildProviderKeyFinding(input: Awaited<ReturnType<typeof readProviderKeyStatus>>): ProviderHealthFinding {
+function buildProviderKeyFinding(
+  provider: "gemini" | "github",
+  input: Awaited<ReturnType<typeof readProviderKeyStatus>>
+): ProviderHealthFinding {
+  const label = provider === "gemini" ? "Gemini" : "GitHub";
+  const findingKey = `${provider}-key-readiness`;
+
   if (input.validation.status === "valid") {
     return {
-      findingKey: "gemini-key-readiness",
+      findingKey,
       surface: "provider-key",
       status: "healthy",
-      summary: "Gemini key material is validated for runtime use.",
+      summary: `${label} key material is validated for runtime use.`,
       detail: input.validation.detail,
       evidence: [
         `source=${input.source}`,
@@ -133,13 +146,13 @@ function buildProviderKeyFinding(input: Awaited<ReturnType<typeof readProviderKe
   }
 
   return {
-    findingKey: "gemini-key-readiness",
+    findingKey,
     surface: "provider-key",
     status: input.validation.status === "not-configured" ? "unavailable" : "degraded",
     summary:
       input.validation.status === "not-configured"
-        ? "Gemini key material is not configured, so Gemini cannot become an active validated route."
-        : "Gemini key material is present but not ready for validated runtime use.",
+        ? `${label} key material is not configured, so ${label} cannot become an active validated route.`
+        : `${label} key material is present but not ready for validated runtime use.`,
     detail: input.validation.detail,
     evidence: [
       `configured=${String(input.configured)}`,

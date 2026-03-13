@@ -33,7 +33,7 @@ const INSERT_PROVIDER_KEY_SQL = `
 const GEMINI_VALIDATION_URL = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1";
 const ENCRYPTION_CONTEXT = "aaronclaw:provider-key:v1";
 
-export type ExternalProvider = "gemini" | "cloudflare";
+export type ExternalProvider = "gemini" | "cloudflare" | "github";
 export type ProviderKeySource = "none" | "protected-store" | "worker-secret";
 export type ProviderKeyValidationStatus =
   | "not-configured"
@@ -212,6 +212,10 @@ export async function validateProviderApiKey(
   const normalizedApiKey = normalizeApiKey(apiKey);
   const checkedAt = new Date().toISOString();
 
+  if (provider === "github") {
+    return validateGithubToken(normalizedApiKey);
+  }
+
   if (provider !== "gemini") {
     return {
       status: "validation-error",
@@ -259,22 +263,29 @@ export async function validateProviderApiKey(
 }
 
 function getProviderLabel(provider: ExternalProvider): string {
-  return provider === "gemini" ? "Google Gemini" : provider;
+  if (provider === "gemini") return "Google Gemini";
+  if (provider === "github") return "GitHub";
+  return provider;
 }
 
 function getProviderValidationTarget(provider: ExternalProvider): string {
-  return provider === "gemini" ? "GET /v1beta/models?pageSize=1" : provider;
+  if (provider === "gemini") return "GET /v1beta/models?pageSize=1";
+  if (provider === "github") return "GET https://api.github.com/user";
+  return provider;
 }
 
-function readProviderKeyFromEnv(
-  env: Pick<Env, "GEMINI_API_KEY">,
+export function readProviderKeyFromEnv(
+  env: Pick<Env, "GEMINI_API_KEY" | "GITHUB_TOKEN">,
   provider: ExternalProvider
 ): string | null {
-  if (provider !== "gemini") {
-    return null;
+  if (provider === "gemini") {
+    return normalizeOptionalSecret(env.GEMINI_API_KEY);
+  }
+  if (provider === "github") {
+    return normalizeOptionalSecret(env.GITHUB_TOKEN);
   }
 
-  return normalizeOptionalSecret(env.GEMINI_API_KEY);
+  return null;
 }
 
 async function readStoredProviderKeyRecord(
@@ -417,6 +428,42 @@ function sanitizeValidationDetail(detail: string | undefined | null): string | n
   }
 
   return detail.replace(/\s+/g, " ").trim().slice(0, 240) || null;
+}
+
+async function validateGithubToken(token: string): Promise<ProviderKeyValidationResult> {
+  const checkedAt = new Date().toISOString();
+  try {
+    const response = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `token ${token}`,
+        "User-Agent": "aaronclaw-software-factory"
+      }
+    });
+    
+    if (response.ok) {
+      const payload = await response.json() as { login: string };
+      return {
+        status: "valid",
+        checkedAt,
+        detail: `Successfully validated as GitHub user: ${payload.login}`,
+        target: getProviderValidationTarget("github")
+      };
+    }
+    
+    return {
+      status: "invalid",
+      checkedAt,
+      detail: `GitHub validation failed (status ${response.status}). Check token scopes.`,
+      target: getProviderValidationTarget("github")
+    };
+  } catch (error) {
+    return {
+      status: "validation-error",
+      checkedAt,
+      detail: error instanceof Error ? error.message : "GitHub API connection failed",
+      target: getProviderValidationTarget("github")
+    };
+  }
 }
 
 function encodeBase64(bytes: Uint8Array): string {
