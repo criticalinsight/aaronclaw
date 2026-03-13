@@ -8,7 +8,7 @@ session memory.
 
 The current live deployment is:
 
-- `https://aaronclaw.moneyacad.workers.dev`
+- `https://aaronclaw.workers.dev`
 
 ## Start here
 
@@ -109,7 +109,7 @@ validation notes, and troubleshooting guidance.
 
 Rich Hickey warning: this manual Wrangler path is the only deploy path verified
 from the repo right now. Do **not** assume a push to `plan-cloudflare-openclaw`
-updates `https://aaronclaw.moneyacad.workers.dev` until automatic publish is
+updates `https://aaronclaw.workers.dev` until automatic publish is
 proven with live evidence.
 
 ## Philosophical Positioning: AaronClaw vs. OpenClaw 🧙🏾‍♂️

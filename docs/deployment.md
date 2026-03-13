@@ -252,7 +252,7 @@ These checks match the current runtime behavior:
 
 ```sh
 curl -I https://aaronclaw.moneyacad.workers.dev/
-curl -sS https://aaronclaw.moneyacad.workers.dev/health
+curl -sS https://aaronclaw.workers.dev/health
 ```
 
 You should expect:
@@ -263,9 +263,9 @@ You should expect:
 If `APP_AUTH_TOKEN` is configured, also check the protected operator surfaces:
 
 ```sh
-curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/skills
-curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/hands
-curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.moneyacad.workers.dev/api/improvements
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.workers.dev/api/skills
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.workers.dev/api/hands
+curl -sS -H "Authorization: Bearer <APP_AUTH_TOKEN>" https://aaronclaw.workers.dev/api/improvements
 ```
 
 You should expect bundled skill readiness / declared tool policy data, hand

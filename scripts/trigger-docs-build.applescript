@@ -3,7 +3,7 @@
 
 set authToken to ""
 set handId to "docs-factory"
-set baseUrl to "https://aaronclaw.moneyacad.workers.dev" -- Production URL
+set baseUrl to "https://aaronclaw.workers.dev" -- Production URL
 
 display dialog "Enter AaronClaw APP_AUTH_TOKEN:" default answer "" with hidden answer
 set authToken to text returned of result
