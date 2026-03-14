@@ -11,34 +11,48 @@ vi.mock("../src/hands-runtime", () => ({
 }));
 
 vi.mock("../src/knowledge-vault", () => ({
-  queryKnowledgeVault: vi.fn(() => Promise.resolve({ matches: [], source: "mock" }))
+  queryKnowledgeVault: vi.fn(() => Promise.resolve({ matches: [], source: "mock" })),
+  expandSemanticTerms: vi.fn(() => Promise.resolve(["mocked term"])),
+  buildSemanticVector: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
+  scoreTermOverlap: vi.fn(() => 0.5),
+  safeVectorScore: vi.fn(() => 0.5),
+  roundScore: vi.fn(() => 0.5)
 }));
 
 describe("SessionRuntime Agentic Loop", () => {
   it("should execute a tool call and re-invoke the assistant", async () => {
     const { triggerBundledHandRunManual } = await import("../src/hands-runtime");
 
-    const mockAiRun = vi.fn();
-    mockAiRun
-      // 1. First reply contains a tool call
-      .mockResolvedValueOnce({
-        response: "I'll create that website for you.",
-        tool_calls: [
-          {
-            id: "call_123",
-            type: "function",
-            function: {
-              name: "hand-run-manual",
-              arguments: JSON.stringify({ handId: "website-factory", input: { prompt: "dark mode photographer" } })
+    const mockAiRun = vi.fn().mockImplementation((model: string, input: any) => {
+      if (model.includes("bge-small")) {
+        return Promise.resolve({ data: [new Array(384).fill(0.1)] });
+      }
+
+      // Handle chat completion requests
+      const isToolCompletion = input.messages.some((m: any) => m.role === "tool");
+      if (!isToolCompletion) {
+        // 1. First reply contains a tool call
+        return Promise.resolve({
+          response: "I'll create that website for you.",
+          tool_calls: [
+            {
+              id: "call_123",
+              type: "function",
+              function: {
+                name: "hand-run-manual",
+                arguments: JSON.stringify({ handId: "website-factory", input: { prompt: "dark mode photographer" } })
+              }
             }
-          }
-        ]
-      })
-      // 2. Second reply (after tool execution) contains the final text
-      .mockResolvedValueOnce({
-        response: "Website creation has been triggered.",
-        tool_calls: []
-      });
+          ]
+        });
+      } else {
+        // 2. Second reply (after tool execution) contains the final text
+        return Promise.resolve({
+          response: "Website creation has been triggered.",
+          tool_calls: []
+        });
+      }
+    });
 
     (triggerBundledHandRunManual as any).mockResolvedValue({
       status: "triggered",

@@ -1114,5 +1114,5 @@ function handleRepositoryError(error: unknown): Response {
     return json({ error: error.message }, 404);
   }
 
-  return json({ error: "internal error" }, 500);
+  return json({ error: error instanceof Error ? error.stack : String(error) }, 500);
 }

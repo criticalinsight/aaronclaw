@@ -10,7 +10,8 @@
     "deploy:dry-run": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc --dry-run",
     "deploy": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc",
     "typecheck": "npx tsc --noEmit",
-    "check": "npm run typecheck && npm run test"
+    "check": "npm run typecheck && npm run test",
+    "architectura": "npx tsx scripts/architectura-loop.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,8 +20,13 @@
   "private": true,
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260313.1",
+    "@types/node": "^25.5.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.0",
-    "wrangler": "^4.72.0"
+    "wrangler": "^4.73.0"
+  },
+  "overrides": {
+    "undici": "^7.24.3"
   }
 }
