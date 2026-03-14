@@ -16,7 +16,8 @@ interface WorkersAiBinding {
   run(
     model: string,
     input: {
-      messages: WorkersAiMessage[];
+      messages?: WorkersAiMessage[];
+      text?: string | string[];
       tools?: {
         type: "function";
         function: {
@@ -28,7 +29,7 @@ interface WorkersAiBinding {
       max_tokens?: number;
       temperature?: number;
     }
-  ): Promise<unknown>;
+  ): Promise<any>;
 }
 
 interface Env {

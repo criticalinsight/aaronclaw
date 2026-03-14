@@ -13,6 +13,7 @@ export type BundledHandImplementation =
   | "daily-briefing-generator"
   | "error-cluster-detect"
   | "managed-refactor"
+  | "synthetic-reflection-loop"
   | "credential-leak-watchdog"
   | "usage-spike-analyzer"
   | "latent-reflection-miner"
@@ -346,5 +347,13 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "managed-refactor"
+  },
+  {
+    id: "synthetic-reflection-loop",
+    label: "Synthetic Reflection Loop",
+    description: "Generates high-probability failure edge cases and chaos scenarios from successful trajectories to improve robustness.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
+    implementation: "synthetic-reflection-loop"
   }
 ] as const satisfies readonly BundledHandDefinition[];

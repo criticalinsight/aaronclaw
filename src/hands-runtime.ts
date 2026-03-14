@@ -11,6 +11,7 @@ import {
   runScheduledMaintenance,
   runReflexiveAudit,
   runAutonomousEvolution,
+  runSyntheticReflectionLoop,
   scheduledMaintenanceCrons,
   type ReflexiveAuditResult
 } from "./reflection-engine";
@@ -135,21 +136,7 @@ export interface BundledHandState {
 }
 
 export async function triggerBundledHandRunManual(input: {
-  env: Pick<
-    Env,
-    | "AARONDB"
-    | "AI"
-    | "AI_MODEL"
-    | "APP_AUTH_TOKEN"
-    | "GEMINI_API_KEY"
-    | "GITHUB_TOKEN"
-    | "CLOUDFLARE_API_TOKEN"
-    | "CLOUDFLARE_EMAIL"
-    | "CLOUDFLARE_API_KEY"
-    | "CLOUDFLARE_ACCOUNT_ID"
-    | "TELEGRAM_BOT_TOKEN"
-    | "TELEGRAM_WEBHOOK_SECRET"
-  >;
+  env: Env;
   handId: string;
   input?: any;
 }): Promise<BundledHandState | null> {
@@ -243,21 +230,7 @@ export async function setBundledHandLifecycle(input: {
 }
 
 export async function runScheduledHands(input: {
-  env: Pick<
-    Env,
-    | "AARONDB"
-    | "AI"
-    | "AI_MODEL"
-    | "APP_AUTH_TOKEN"
-    | "GEMINI_API_KEY"
-    | "GITHUB_TOKEN"
-    | "CLOUDFLARE_API_TOKEN"
-    | "CLOUDFLARE_EMAIL"
-    | "CLOUDFLARE_API_KEY"
-    | "CLOUDFLARE_ACCOUNT_ID"
-    | "TELEGRAM_BOT_TOKEN"
-    | "TELEGRAM_WEBHOOK_SECRET"
-  >;
+  env: Env;
   cron: string;
   timestamp?: string;
 }): Promise<{
@@ -319,33 +292,19 @@ async function ensureHandRepository(
 }
 
 async function executeBundledHandRun(input: {
-  env: Pick<
-    Env,
-    | "AARONDB"
-    | "DB"
-    | "AI"
-    | "AI_MODEL"
-    | "APP_AUTH_TOKEN"
-    | "GEMINI_API_KEY"
-    | "GITHUB_TOKEN"
-    | "CLOUDFLARE_API_TOKEN"
-    | "CLOUDFLARE_EMAIL"
-    | "CLOUDFLARE_API_KEY"
-    | "CLOUDFLARE_ACCOUNT_ID"
-    | "TELEGRAM_BOT_TOKEN"
-    | "TELEGRAM_WEBHOOK_SECRET"
-  >;
+  env: Env;
   definition: BundledHandDefinition;
   cron: string;
   timestamp: string;
   input?: any;
 }): Promise<void> {
-  const repository = await ensureHandRepository(input.env, input.definition, input.timestamp);
+  const sandboxedEnv = mountSubstrateSandbox(input.env, input.definition.id);
+  const repository = await ensureHandRepository(sandboxedEnv, input.definition, input.timestamp);
 
   try {
     if (input.definition.implementation === "scheduled-maintenance") {
       const maintenance = await runScheduledMaintenance({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -401,7 +360,7 @@ async function executeBundledHandRun(input: {
 
       // Recursive Evolution: Spawn improved agents from "Promoted" proposals
       const recursiveEvolution = await triggerRecursiveEvolution({
-        env: input.env,
+        env: sandboxedEnv,
         timestamp: input.timestamp
       });
 
@@ -447,7 +406,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "user-correction-miner") {
       const correctionReview = await runScheduledUserCorrectionMining({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -495,7 +454,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "regression-watch") {
       const regressionReview = await runScheduledRegressionWatch({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -541,7 +500,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "docs-drift") {
       const docsDriftReview = await runScheduledDocsDriftReview({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron
       });
 
@@ -550,7 +509,7 @@ async function executeBundledHandRun(input: {
         // 🧙🏾‍♂️ Rich Hickey: Documentation must derive from the truth.
         // If drift is detected, synthesize the new truth.
         const factoryResult = await runDocsFactory({
-          env: input.env,
+          env: sandboxedEnv,
           cron: input.cron,
           timestamp: input.timestamp
         });
@@ -593,7 +552,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "provider-health-watchdog") {
       const healthReport = await runProviderHealthWatchdog({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -636,7 +595,7 @@ async function executeBundledHandRun(input: {
     }
 
     if (input.definition.implementation === "ttl-garbage-collector") {
-      const report = await runTtlGarbageCollector(input.env);
+      const report = await runTtlGarbageCollector(sandboxedEnv);
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
@@ -662,7 +621,7 @@ async function executeBundledHandRun(input: {
     }
 
     if (input.definition.implementation === "orphan-fact-cleanup") {
-      const report = await runOrphanFactCleanup(input.env);
+      const report = await runOrphanFactCleanup(sandboxedEnv);
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
@@ -689,7 +648,7 @@ async function executeBundledHandRun(input: {
     }
 
     if (input.definition.implementation === "github-coordinator") {
-      const result = await runGithubCoordinator(input.env);
+      const result = await runGithubCoordinator(sandboxedEnv);
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
@@ -715,7 +674,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "docs-factory") {
       const result = await runDocsFactory({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -744,7 +703,7 @@ async function executeBundledHandRun(input: {
     }
 
     if (input.definition.implementation === "daily-briefing-generator") {
-      const briefing = await runDailyBriefingGenerator(input.env);
+      const briefing = await runDailyBriefingGenerator(sandboxedEnv);
       const reviewedSessionIds = (briefing.reviewedSessionIds as string[]) ?? [];
       await repository.appendToolEvent({
         timestamp: input.timestamp,
@@ -773,7 +732,7 @@ async function executeBundledHandRun(input: {
 
     if (input.definition.implementation === "structural-hand-synthesis") {
       const evolution = await runAutonomousEvolution({
-        env: input.env,
+        env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
@@ -832,6 +791,36 @@ async function executeBundledHandRun(input: {
             extra: {
               ...refactorResult
             }
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "synthetic-reflection-loop") {
+      const result = await runSyntheticReflectionLoop({
+        env: sandboxedEnv,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} created ${result.generatedPatternCount} global chaos pattern(s). Scenarios: ${result.syntheticScenarios.join(", ")}.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          generatedPatternCount: result.generatedPatternCount,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} synthesized ${result.generatedPatternCount} chaos scenarios.`
           })
         }
       });
@@ -1878,4 +1867,52 @@ Return the result as a JSON array of { path: string, content: string }.`,
     succeededCount,
     errorCount
   };
+}
+/**
+ * 🧙🏾‍♂️ Rich Hickey: Substrate Isolation (Sandboxing)
+ * Provision isolated KV prefixes and scoped bindings to prevent identity-leakage
+ * between autonomous session Hand executions.
+ */
+export function mountSubstrateSandbox(env: Env, handId: string): Env {
+  const prefix = `hand:${handId}:`;
+
+  const sandboxedEnv: Env = { ...env };
+
+  // 1. Isolate CONFIG_KV if present
+  if (env.CONFIG_KV) {
+    sandboxedEnv.CONFIG_KV = {
+      get: (key: string, options?: any) => env.CONFIG_KV!.get(`${prefix}${key}`, options),
+      put: (key: string, value: any, options?: any) =>
+        env.CONFIG_KV!.put(`${prefix}${key}`, value, options),
+      delete: (key: string) => env.CONFIG_KV!.delete(`${prefix}${key}`),
+      list: (options?: any) =>
+        env.CONFIG_KV!.list({
+          ...options,
+          prefix: `${prefix}${options?.prefix ?? ""}`
+        }),
+      getWithMetadata: (key: string, options?: any) =>
+        env.CONFIG_KV!.getWithMetadata(`${prefix}${key}`, options)
+    } as KVNamespace;
+  }
+
+  // 2. Isolate R2 ARCHIVE if present
+  if (env.ARCHIVE) {
+    sandboxedEnv.ARCHIVE = {
+      get: (key: string, options?: any) => env.ARCHIVE!.get(`${prefix}${key}`, options),
+      put: (key: string, value: any, options?: any) =>
+        env.ARCHIVE!.put(`${prefix}${key}`, value, options),
+      delete: (key: string) => env.ARCHIVE!.delete(`${prefix}${key}`),
+      list: (options?: any) =>
+        env.ARCHIVE!.list({
+          ...options,
+          prefix: `${prefix}${options?.prefix ?? ""}`
+        }),
+      head: (key: string) => env.ARCHIVE!.head(`${prefix}${key}`)
+    } as R2Bucket;
+  }
+
+  // 🧙🏾‍♂️ NOTE: D1 Isolation is achieved via the sessionId scoping in AaronDbEdgeSessionRepository.
+  // We do not prefix table names as it would complect the schema logic.
+
+  return sandboxedEnv;
 }

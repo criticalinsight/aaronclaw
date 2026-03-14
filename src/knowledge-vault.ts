@@ -4,8 +4,8 @@ import {
 } from "./aarondb-edge-substrate";
 import type { JsonValue, SessionEventKind } from "./session-state";
 
-const KNOWLEDGE_VAULT_NAMESPACE = "aaronclaw-knowledge-vault";
-const KNOWLEDGE_VAULT_VECTOR_DIMENSIONS = 24;
+const KNOWLEDGE_VAULT_NAMESPACE = "aaronclaw-knowledge-vault-v2";
+const KNOWLEDGE_VAULT_MODEL = "@cf/baai/bge-m3";
 const DEFAULT_VAULT_MATCH_LIMIT = 3;
 const NOISY_TERMS = new Set([
   "a",
@@ -20,19 +20,12 @@ const NOISY_TERMS = new Set([
   "this",
   "with"
 ]);
-const SEMANTIC_EXPANSIONS: Record<string, string[]> = {
-  aarondb: ["memory", "facts", "session"],
-  context: ["memory", "history", "recall"],
-  d1: ["database", "facts", "storage"],
-  facts: ["memory", "history", "replay"],
-  history: ["prior", "recall", "vault"],
-  knowledge: ["memory", "vault", "recall"],
-  recall: ["retrieve", "remember", "search"],
-  session: ["conversation", "history", "state"],
-  vector: ["embedding", "vectorize", "semantic"],
-  vectorize: ["vector", "embedding", "semantic"],
-  vault: ["knowledge", "history", "recall"]
-};
+
+const SEMANTIC_ONTOLOGY_SELECT_SQL = `
+  SELECT expansions
+  FROM semantic_ontology
+  WHERE term = ?
+`;
 
 const HISTORICAL_FACT_SELECT_SQL = `
   SELECT session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation
@@ -95,13 +88,13 @@ export interface KnowledgeVaultResult {
 }
 
 export async function queryKnowledgeVault(input: {
-  env: Pick<Env, "AARONDB"> & Partial<Pick<Env, "VECTOR_INDEX">>;
+  env: Pick<Env, "AARONDB" | "AI"> & Partial<Pick<Env, "VECTOR_INDEX">>;
   sessionId: string;
   query: string;
   limit?: number;
 }): Promise<KnowledgeVaultResult> {
   const limit = input.limit ?? DEFAULT_VAULT_MATCH_LIMIT;
-  const queryTerms = expandSemanticTerms(input.query);
+  const queryTerms = await expandSemanticTerms(input.env, input.query);
 
   if (queryTerms.length === 0) {
     return { matches: [], source: input.env.VECTOR_INDEX ? "vectorize" : "d1-compat" };
@@ -112,8 +105,9 @@ export async function queryKnowledgeVault(input: {
     return { matches: [], source: input.env.VECTOR_INDEX ? "vectorize" : "d1-compat" };
   }
 
-  const queryVector = buildSemanticVector(queryTerms);
+  const queryVector = await buildSemanticVector(input.env.AI, queryTerms.join(" "));
   const vectorizeMatches = await queryVectorizeMatches(
+    input.env.AI,
     input.env.VECTOR_INDEX,
     documents,
     queryVector,
@@ -125,7 +119,9 @@ export async function queryKnowledgeVault(input: {
   }
 
   return {
-    matches: rankDocuments(documents, queryTerms, queryVector, limit).map((match) => ({
+    matches: (
+      await rankDocuments(input.env.AI, input.env.AARONDB, documents, queryTerms, queryVector, limit)
+    ).map((match) => ({
       ...match,
       source: "d1-compat"
     })),
@@ -215,6 +211,7 @@ function finalizeHistoricalEventDocument(
 }
 
 async function queryVectorizeMatches(
+  ai: WorkersAiBinding,
   index: VectorizeIndex | undefined,
   documents: HistoricalEventDocument[],
   queryVector: number[],
@@ -225,11 +222,11 @@ async function queryVectorizeMatches(
   }
 
   try {
-    await index.upsert(
-      documents.map((document) => ({
+    const upserts = await Promise.all(
+      documents.map(async (document) => ({
         id: `${document.sessionId}:${document.eventId}`,
         namespace: KNOWLEDGE_VAULT_NAMESPACE,
-        values: buildSemanticVector(expandSemanticTerms(document.preview)),
+        values: await buildSemanticVector(ai, document.preview),
         metadata: {
           sessionId: document.sessionId,
           eventId: document.eventId,
@@ -240,6 +237,8 @@ async function queryVectorizeMatches(
         }
       }))
     );
+
+    await index.upsert(upserts);
 
     const result = await index.query(queryVector, {
       topK: limit,
@@ -286,18 +285,21 @@ function normalizeVectorizeMatch(match: VectorizeMatch): KnowledgeVaultMatch | n
   };
 }
 
-function rankDocuments(
+async function rankDocuments(
+  ai: WorkersAiBinding,
+  database: D1Database,
   documents: HistoricalEventDocument[],
   queryTerms: string[],
   queryVector: number[],
   limit: number
-): Omit<KnowledgeVaultMatch, "source">[] {
-  return documents
-    .map((document) => {
-      const documentTerms = expandSemanticTerms(document.preview);
+): Promise<Omit<KnowledgeVaultMatch, "source">[]> {
+  const ranked = await Promise.all(
+    documents.map(async (document) => {
+      const documentTerms = await expandSemanticTerms({ AI: ai, AARONDB: database }, document.preview);
       const overlap = scoreTermOverlap(queryTerms, documentTerms);
-      const vectorScore = safeVectorScore(queryVector, buildSemanticVector(documentTerms));
-      const score = roundScore(overlap * 0.55 + vectorScore * 0.45);
+      const documentVector = await buildSemanticVector(ai, document.preview);
+      const vectorScore = safeVectorScore(queryVector, documentVector);
+      const score = roundScore(overlap * 0.4 + vectorScore * 0.6); // Weight shifted towards vector precision
 
       return {
         sessionId: document.sessionId,
@@ -309,23 +311,66 @@ function rankDocuments(
         score
       };
     })
+  );
+
+  return ranked
     .filter((match) => match.score > 0)
     .sort((left, right) => right.score - left.score || compareDocumentsByRecency(left, right))
     .slice(0, limit);
 }
 
-function expandSemanticTerms(value: string): string[] {
+export async function expandSemanticTerms(
+  env: Pick<Env, "AI" | "AARONDB"> & { VECTOR_INDEX?: VectorizeIndex },
+  value: string
+): Promise<string[]> {
   const expanded = new Set<string>();
+  const tokens = tokenize(value);
+  const ai = env.AI;
+  const db = env.AARONDB;
+  const index = env.VECTOR_INDEX;
 
-  for (const term of tokenize(value)) {
+  for (const term of tokens) {
     if (NOISY_TERMS.has(term)) {
       continue;
     }
 
     expanded.add(term);
 
-    for (const synonym of SEMANTIC_EXPANSIONS[term] ?? []) {
-      expanded.add(synonym);
+    // 🧙🏾‍♂️ Rich Hickey: Vector-based dynamic ontology lookup.
+    // De-complecting exact matches from semantic intent.
+    try {
+      const termVector = await buildSemanticVector(ai, term, "@cf/baai/bge-small-en-v1.5");
+      
+      // Attempt vector search in ontology namespace if available
+      const matches = await index?.query(termVector, {
+        topK: 5,
+        namespace: "ontology",
+        returnMetadata: "all"
+      });
+
+      if (matches?.matches && matches.matches.length > 0) {
+        for (const match of matches.matches) {
+          const expansions = JSON.parse((match.metadata?.expansions as string) || "[]");
+          for (const e of expansions) {
+            expanded.add(e);
+          }
+        }
+      } else {
+        // Fallback to exact match in D1
+        const result = await db
+          .prepare(SEMANTIC_ONTOLOGY_SELECT_SQL)
+          .bind(term)
+          .first<{ expansions: string }>();
+
+        if (result?.expansions) {
+          const synonyms = JSON.parse(result.expansions) as string[];
+          for (const synonym of synonyms) {
+            expanded.add(synonym);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`Semantic Expansion: Dynamic lookup failed for ${term}`, e);
     }
   }
 
@@ -339,14 +384,22 @@ function tokenize(value: string): string[] {
     .filter((term) => term.length > 1);
 }
 
-function buildSemanticVector(terms: string[]): number[] {
-  const vector = Array.from({ length: KNOWLEDGE_VAULT_VECTOR_DIMENSIONS }, () => 0);
-
-  for (const term of terms) {
-    addVectorWeight(vector, term, 1);
+export async function buildSemanticVector(
+  ai: WorkersAiBinding,
+  text: string,
+  model: string = KNOWLEDGE_VAULT_MODEL
+): Promise<number[]> {
+  try {
+    const response = await ai.run(model, {
+      text: [text]
+    });
+    return response.data[0];
+  } catch (error) {
+    console.error(`KnowledgeVault: Embedding error (${model})`, error);
+    // Return zero vector of appropriate size as fallback
+    const dims = model === "@cf/baai/bge-small-en-v1.5" ? 384 : 1024;
+    return Array.from({ length: dims }, () => 0);
   }
-
-  return vector;
 }
 
 function addVectorWeight(vector: number[], value: string, weight: number): void {
@@ -357,7 +410,7 @@ function addVectorWeight(vector: number[], value: string, weight: number): void 
   vector[secondarySlot] += weight / 2;
 }
 
-function scoreTermOverlap(queryTerms: string[], documentTerms: string[]): number {
+export function scoreTermOverlap(queryTerms: string[], documentTerms: string[]): number {
   const querySet = new Set(queryTerms);
   if (querySet.size === 0) {
     return 0;
@@ -375,7 +428,7 @@ function scoreTermOverlap(queryTerms: string[], documentTerms: string[]): number
   return overlap / querySet.size;
 }
 
-function safeVectorScore(left: number[], right: number[]): number {
+export function safeVectorScore(left: number[], right: number[]): number {
   const raw = compareAaronDbEdgeVectors(left, right);
   return Number.isFinite(raw) ? Math.max(0, raw) : 0;
 }
@@ -395,7 +448,7 @@ function parseJson(value: string): JsonValue | null {
   }
 }
 
-function roundScore(value: number): number {
+export function roundScore(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 

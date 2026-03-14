@@ -1,8 +1,11 @@
 import {
-  compareAaronDbEdgeVectors,
-  fingerprintAaronDbEdgeValue
-} from "./aarondb-edge-substrate";
-import type { KnowledgeVaultMatch } from "./knowledge-vault";
+  buildSemanticVector,
+  expandSemanticTerms,
+  KnowledgeVaultMatch,
+  roundScore,
+  safeVectorScore,
+  scoreTermOverlap
+} from "./knowledge-vault";
 import { getConfiguredWorkersAiModel } from "./model-registry";
 import type { RecallMatch, SessionEvent, SessionRecord } from "./session-state";
 
@@ -13,50 +16,8 @@ const MAX_PREFETCH_MATCHES = 4;
 const PERSONA_NAME = "AaronClaw";
 const PERSONA_GOAL =
   "Provide practical, concise browser-first assistance grounded in AaronDB-backed session memory.";
-const SEMANTIC_VECTOR_DIMENSIONS = 24;
 const PROMPT_PREVIEW_LENGTH = 180;
-const SEMANTIC_EXPANSIONS: Record<string, string[]> = {
-  agent: ["assistant", "persona"],
-  assistant: ["agent", "persona", "aaronclaw"],
-  context: ["memory", "recall"],
-  d1: ["database", "facts", "storage"],
-  database: ["d1", "facts", "storage"],
-  facts: ["memory", "replay", "state"],
-  memory: ["remember", "recall", "persist", "context"],
-  persist: ["store", "memory", "facts"],
-  persona: ["assistant", "identity", "agent"],
-  recall: ["memory", "retrieve", "search"],
-  remember: ["memory", "recall", "persist"],
-  replay: ["rehydrate", "history", "facts"],
-  rehydrate: ["replay", "restore", "state"],
-  search: ["recall", "retrieve", "lookup"],
-  session: ["conversation", "history", "state"],
-  state: ["memory", "session", "facts"],
-  storage: ["database", "persist", "d1"],
-  tool: ["action", "event", "search"]
-};
-const NOISY_TERMS = new Set([
-  "a",
-  "an",
-  "and",
-  "are",
-  "for",
-  "from",
-  "how",
-  "in",
-  "is",
-  "of",
-  "on",
-  "or",
-  "please",
-  "that",
-  "the",
-  "this",
-  "to",
-  "what",
-  "with",
-  "your"
-]);
+const WARM_MEMORY_MODEL = "@cf/baai/bge-small-en-v1.5";
 
 type AssistantPersonaAttribute =
   | "type"
@@ -147,17 +108,19 @@ export interface AssistantReply {
   tool_calls?: WorkersAiMessage["tool_calls"];
 }
 
-export function buildAssistantPersonaRuntime(input: {
+export async function buildAssistantPersonaRuntime(input: {
+  env: Env;
   session: SessionRecord;
   sessionId: string;
   userMessage: string;
   recallMatches: RecallMatch[];
   knowledgeVaultMatches: KnowledgeVaultMatch[];
   promptAdditions?: string[];
-}): AssistantPersonaRuntime {
+}): Promise<AssistantPersonaRuntime> {
   const recallMatches = input.recallMatches.slice(0, MAX_RECALL_MATCHES);
   const personaEntity = `persona:${input.sessionId}:aaronclaw`;
-  const prefetchedContext = prefetchSemanticContext({
+  const prefetchedContext = await prefetchSemanticContext({
+    env: input.env,
     session: input.session,
     userMessage: input.userMessage,
     recallMatches,
@@ -198,7 +161,8 @@ export async function generateAssistantReply(input: {
   promptAdditions?: string[];
 }): Promise<AssistantReply> {
   const recallMatches = input.recallMatches.slice(0, MAX_RECALL_MATCHES);
-  const personaRuntime = buildAssistantPersonaRuntime({
+  const personaRuntime = await buildAssistantPersonaRuntime({
+    env: input.env,
     session: input.session,
     sessionId: input.sessionId,
     userMessage: input.userMessage,
@@ -664,6 +628,17 @@ function buildPersonaFacts(input: {
   ];
 }
 
+function buildPrefetchSystemMessage(prefetchedContext: SemanticPrefetchMatch[]): string {
+  return [
+    "Semantic prefetch warmed context before final response generation:",
+    ...prefetchedContext.map(
+      (match, index) =>
+        `${index + 1}. [${match.source} score=${match.score.toFixed(2)}] ${trimText(match.preview, PROMPT_PREVIEW_LENGTH)}`
+    ),
+    "Use the prefetched context if it helps answer the latest user request."
+  ].join("\n");
+}
+
 function buildPromptMessages(
   session: SessionRecord,
   userMessage: string,
@@ -723,23 +698,13 @@ function buildPersonaSystemMessage(facts: AssistantPersonaFact[]): string {
   ].join("\n");
 }
 
-function buildPrefetchSystemMessage(prefetchedContext: SemanticPrefetchMatch[]): string {
-  return [
-    "Semantic prefetch warmed context before final response generation:",
-    ...prefetchedContext.map(
-      (match, index) =>
-        `${index + 1}. [${match.source} score=${match.score.toFixed(2)}] ${trimText(match.preview, PROMPT_PREVIEW_LENGTH)}`
-    ),
-    "Use the prefetched context if it helps answer the latest user request."
-  ].join("\n");
-}
-
-function prefetchSemanticContext(input: {
+async function prefetchSemanticContext(input: {
+  env: Env;
   session: SessionRecord;
   userMessage: string;
   recallMatches: RecallMatch[];
   knowledgeVaultMatches: KnowledgeVaultMatch[];
-}): SemanticPrefetchMatch[] {
+}): Promise<SemanticPrefetchMatch[]> {
   const candidates = collectSemanticCandidates(
     input.session,
     input.userMessage,
@@ -751,18 +716,24 @@ function prefetchSemanticContext(input: {
     return [];
   }
 
-  const queryTerms = expandSemanticTerms(input.userMessage);
-  const queryVector = buildSemanticVector(queryTerms);
-  const ranked = candidates
-    .map((candidate) => ({
+  const queryTerms = await expandSemanticTerms(input.env, input.userMessage);
+  const queryVector = await buildSemanticVector(input.env.AI, input.userMessage, WARM_MEMORY_MODEL);
+
+  const rankedCandidates = await Promise.all(
+    candidates.map(async (candidate) => ({
       ...candidate,
-      score: scoreSemanticCandidate({
+      score: await scoreSemanticCandidate({
+        ai: input.env.AI,
+        database: input.env.AARONDB,
         candidate,
         queryTerms,
         queryVector,
         lastTx: input.session.lastTx
       })
     }))
+  );
+
+  const ranked = rankedCandidates
     .filter(
       (candidate) =>
         candidate.score > 0 ||
@@ -856,91 +827,22 @@ function collectSemanticCandidates(
   return [...candidates.values()];
 }
 
-function scoreSemanticCandidate(input: {
+async function scoreSemanticCandidate(input: {
+  ai: WorkersAiBinding;
+  database: D1Database;
   candidate: SemanticCandidateSeed;
   queryTerms: string[];
   queryVector: number[];
   lastTx: number;
-}): number {
-  const candidateTerms = expandSemanticTerms(input.candidate.preview);
+}): Promise<number> {
+  const candidateTerms = await expandSemanticTerms({ AI: input.ai, AARONDB: input.database }, input.candidate.preview);
   const overlap = scoreTermOverlap(input.queryTerms, candidateTerms);
-  const candidateVector = buildSemanticVector(candidateTerms);
-  const rawVectorScore =
-    input.queryTerms.length > 0 && candidateTerms.length > 0
-      ? compareAaronDbEdgeVectors(input.queryVector, candidateVector)
-      : 0;
-  const vectorScore = Number.isFinite(rawVectorScore) ? Math.max(0, rawVectorScore) : 0;
+  const candidateVector = await buildSemanticVector(input.ai, input.candidate.preview, WARM_MEMORY_MODEL);
+  const vectorScore = safeVectorScore(input.queryVector, candidateVector);
   const recallBoost = input.candidate.recallScore * 0.2;
-  const recencyBoost = input.lastTx > 0 ? (input.candidate.tx / input.lastTx) * 0.05 : 0;
+  const recencyBoost = input.lastTx > 0 ? (input.candidate.tx / input.lastTx) * 0.1 : 0;
 
-  return roundScore(overlap * 0.45 + vectorScore * 0.35 + recallBoost + recencyBoost);
-}
-
-function scoreTermOverlap(queryTerms: string[], candidateTerms: string[]): number {
-  const querySet = new Set(queryTerms);
-
-  if (querySet.size === 0) {
-    return 0;
-  }
-
-  const candidateSet = new Set(candidateTerms);
-  let overlap = 0;
-
-  for (const term of querySet) {
-    if (candidateSet.has(term)) {
-      overlap += 1;
-    }
-  }
-
-  return overlap / querySet.size;
-}
-
-function buildSemanticVector(terms: string[]): number[] {
-  const vector = Array.from({ length: SEMANTIC_VECTOR_DIMENSIONS }, () => 0);
-
-  for (const term of terms) {
-    addVectorWeight(vector, term, 1);
-
-    if (term.length > 4) {
-      addVectorWeight(vector, term.slice(0, 4), 0.5);
-    }
-  }
-
-  return vector;
-}
-
-function addVectorWeight(vector: number[], value: string, weight: number): void {
-  const primarySlot = Math.abs(fingerprintAaronDbEdgeValue(value)) % vector.length;
-  const secondarySlot = Math.abs(fingerprintAaronDbEdgeValue(`${value}:alt`)) % vector.length;
-
-  vector[primarySlot] += weight;
-  vector[secondarySlot] += weight / 2;
-}
-
-function expandSemanticTerms(value: string): string[] {
-  const expanded = new Set<string>();
-
-  for (const term of tokenize(value)) {
-    if (NOISY_TERMS.has(term)) {
-      continue;
-    }
-
-    expanded.add(term);
-
-    for (const synonym of SEMANTIC_EXPANSIONS[term] ?? []) {
-      expanded.add(synonym);
-    }
-
-    if (term.endsWith("ing") && term.length > 5) {
-      expanded.add(term.slice(0, -3));
-    }
-
-    if (term.endsWith("ed") && term.length > 4) {
-      expanded.add(term.slice(0, -2));
-    }
-  }
-
-  return [...expanded];
+  return roundScore(overlap * 0.4 + vectorScore * 0.4 + recallBoost + recencyBoost);
 }
 
 function tokenize(value: string): string[] {
@@ -954,9 +856,6 @@ function previewSessionEvent(event: SessionEvent): string {
   return event.kind === "message" ? event.content : `${event.toolName}: ${event.summary}`;
 }
 
-function roundScore(value: number): number {
-  return Math.round(value * 1000) / 1000;
-}
 
 function extractResponseText(result: unknown): string | null {
   if (typeof result === "string" && result.trim()) {

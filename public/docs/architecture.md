@@ -65,6 +65,14 @@ The AaronClaw factory now operates with a redundant **Autonomous Optimization Lo
 3.  **Architectura (Refactor Engine)**: Generates and applies de-complecting refactors to maintain architectural purity.
 4.  **Aeturnus (The Eternal Swarm)**: Ensures the factory's persistence through distributed health monitoring and autonomous recovery pulse.
 
+## Agentic Mind Upgrades
+
+To support high-fidelity autonomous execution, AaronClaw implements several core cognitive upgrades:
+
+- **Substrate Isolation**: Each Hand executes within a dedicated, isolated KV/D1 prefix (`mountSubstrateSandbox`), preventing identity leakage and cross-contamination between autonomous agents.
+- **Dynamic Semantic Expansion**: Bypassing brittle exact-match expansions, the `knowledge-vault` now uses `@cf/baai/bge-small` to perform continuous vector similarity lookups against a `semantic_ontology`, allowing for semantic understanding of terms.
+- **Synthetic Reflection Loop**: An autonomic chaos-engineering process that synthesizes "failure edge cases" from successful trajectories. These generated global patterns are fed back into the `semantic_ontology` to proactively harden the system via RL-style improvement.
+
 ## Hands and skills runtime
 
 - Bundled hands have evolved into specialized **Autonomous Engines**: `Economos`, `Sophia`, `Architectura`, and `Aeturnus` join the existing `scheduled-maintenance`, `improvement-hand`, and others.

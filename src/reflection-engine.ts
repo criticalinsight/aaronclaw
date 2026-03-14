@@ -2880,3 +2880,98 @@ export const scheduledMaintenanceCrons = {
   maintenance: MAINTENANCE_CRON,
   morningBriefing: MORNING_BRIEFING_CRON
 } as const;
+
+/**
+ * 🧙🏾‍♂️ Rich Hickey: Synthetic Reflection Loop
+ * Port of the GSV (Generative Software Verification) Synthetic Data Pipeline.
+ * De-complects live performance from robustness testing by generating
+ * failure edge cases and storing them as global patterns.
+ */
+export async function runSyntheticReflectionLoop(input: {
+  env: Env;
+  timestamp?: string;
+}): Promise<{
+  generatedPatternCount: number;
+  syntheticScenarios: string[];
+}> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const db = input.env.AARONDB;
+
+  // 1. Fetch Success Trajectories
+  const successes = await db
+    .prepare(
+      `
+    SELECT value_json FROM aarondb_facts 
+    WHERE attribute = 'summary' AND toolName = 'session-reflection'
+    AND operation = 'assert'
+    ORDER BY tx DESC LIMIT 10
+  `
+    )
+    .all<{ value_json: string }>();
+
+  if (successes.results.length === 0) {
+    return { generatedPatternCount: 0, syntheticScenarios: [] };
+  }
+
+  // 2. Generate Synthetic Failure Scenarios via Workers AI
+  const prompt = `
+    Analyze these successful AaronClaw trajectories and synthesize 3 high-probability "Failure Edge Cases" 
+    or "Chaos Scenarios" where these structures might fail.
+    
+    Successful Trajectories:
+    ${successes.results.map((r) => r.value_json).join("\n- ")}
+    
+    Output format: JSON array of objects with { patternKey, problemStatement, proposedAction, expectedBenefit, category: "synthetic-shadow" }
+    Focus on: Latency spikes, identity-leakage, and semantic drift.
+  `;
+
+  const response = await input.env.AI.run("@cf/meta/llama-3-8b-instruct", {
+    messages: [
+      { role: "system", content: "You are the AaronClaw Reflection Engine. Embody Rich Hickey's philosophy of simplicity and robustness." },
+      { role: "user", content: prompt }
+    ]
+  });
+
+  // Extract JSON from response (handling potential markdown wrapping)
+  const content = response.response || response.text || "";
+  const jsonMatch = content.match(/\[\s*\{.*\}\s*\]/s);
+  if (!jsonMatch) {
+    console.error("Failed to parse synthetic patterns from AI response");
+    return { generatedPatternCount: 0, syntheticScenarios: [] };
+  }
+
+  const syntheticPatterns = JSON.parse(jsonMatch[0]) as any[];
+  let generatedPatternCount = 0;
+
+  // 3. Record as global_patterns
+  for (const pattern of syntheticPatterns) {
+    try {
+      await db
+        .prepare(
+          `
+        INSERT INTO global_patterns (patternKey, category, problemStatement, proposedAction, expectedBenefit)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(patternKey) DO UPDATE SET
+          updatedAt = CURRENT_TIMESTAMP,
+          contributionCount = contributionCount + 1
+      `
+        )
+        .bind(
+          pattern.patternKey || `synthetic:${Math.random().toString(36).slice(2, 9)}`,
+          pattern.category || "synthetic-shadow",
+          pattern.problemStatement,
+          pattern.proposedAction,
+          pattern.expectedBenefit
+        )
+        .run();
+      generatedPatternCount++;
+    } catch (e) {
+      console.error(`Failed to record synthetic pattern: ${e}`);
+    }
+  }
+
+  return {
+    generatedPatternCount,
+    syntheticScenarios: syntheticPatterns.map((p) => p.problemStatement)
+  };
+}
