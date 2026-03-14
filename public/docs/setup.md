@@ -97,6 +97,7 @@ chat route.
 ```sh
 npm run typecheck
 npm test
+npm run architectura
 ```
 
 If you are moving from local work to a real Cloudflare deployment, continue with`docs/deployment.md`.
