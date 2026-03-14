@@ -37,7 +37,8 @@ export type BundledHandImplementation =
   | "token-budget-enforcer"
   | "docs-factory"
   | "website-factory"
-  | "github-coordinator";
+  | "github-coordinator"
+  | "structural-hand-synthesis";
 
 // Removed duplicate BundledHandImplementation type
 
@@ -325,8 +326,16 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     id: "website-factory",
     label: "Website Factory",
     description: "Synthesizes and deploys websites based on natural language prompts received from Telegram or other interfaces.",
-    runtime: "cloudflare-native",
-    scheduleCrons: [],
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "website-factory"
+  },
+  {
+    id: "structural-hand-synthesis",
+    label: "Structural Hand Synthesis",
+    description: "Autonomously distills successful trajectories into reusable system hands.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
+    implementation: "structural-hand-synthesis"
   }
 ] as const satisfies readonly BundledHandDefinition[];

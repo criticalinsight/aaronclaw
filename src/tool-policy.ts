@@ -75,7 +75,9 @@ export type ToolId =
   | "sentiment-drift-watch"
   | "capability-mapper"
   | "knowledge-vault-pruner"
-  | "compliance-sweeper";
+  | "compliance-sweeper"
+  | "structural-hand-synthesis"
+  | "reflexive-audit";
 
 export interface ToolDefinition {
   id: ToolId;
@@ -648,6 +650,22 @@ const TOOL_DEFINITIONS = {
     capability: "hand.manage.github",
     policy: "operator-protected",
     declarationMode: "core-runtime"
+  },
+  "reflexive-audit": {
+    id: "reflexive-audit",
+    label: "Reflexive audit",
+    description: "Analyzes tool latency and error patterns from the fact log to generate improvement proposals.",
+    capability: "improvement.audit.reflexive",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "structural-hand-synthesis": {
+    id: "structural-hand-synthesis",
+    label: "Structural hand synthesis",
+    description: "Promotes success evidence into synthesized hands via Sophia Distiller.",
+    capability: "evolution.synthesize.hands",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
   }
 } as const satisfies Record<ToolId, ToolDefinition>;
 

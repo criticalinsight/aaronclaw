@@ -8,7 +8,10 @@ session memory.
 
 The current live deployment is:
 
-- `https://aaronclaw.workers.dev`
+- `https://aaronclaw.moneyacad.workers.dev` (Mission Control)
+- `https://docs.moneyacad.workers.dev` (Documentation Suite)
+
+**Roadmap Status: [PHASE 15: COMPLETE - AETERNUS REACHED]**
 
 ## Start here
 
@@ -36,10 +39,8 @@ In the current codebase and live deployment (`/health`):
   `toolPolicyRuntime: capability-gated`, and
   `toolAuditHistory: structured-session-and-hand-history` describe the current
   hands/skills rollout.
-- Bundled hands stay Cloudflare-native. The current hand bundle consists of
-  `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`,
-  `regression-watch`, `provider-health-watchdog`, `docs-drift`,
-  `ttl-garbage-collector`, `orphan-fact-cleanup`, and `daily-briefing-generator`.
+- **Autonomous Engines**: The factory is powered by a redundant optimization loop consisting of `Economos` (Economic Auditor), `Sophia` (Knowledge Generator), `Architectura` (Refactor Engine), and `Aeturnus` (The Eternal Swarm).
+- These join the existing Hand bundle: `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`, `regression-watch`, `provider-health-watchdog`, `docs-drift`, `ttl-garbage-collector`, `orphan-fact-cleanup`, and `daily-briefing-generator`.
 - Those hands stay bounded: they persist run/audit history and operator-visible
   findings or proposals, but they do not mutate live production behavior
   automatically.
@@ -48,10 +49,9 @@ In the current codebase and live deployment (`/health`):
   (session-only review path), `incident-triage` (bounded diagnostics),
   `gap-analysis-pro` (coverage metrics), `datalog-query-expert` (schema evidence),
   and `security-posture-audit` (anomaly detection).
-- The shipped self-improvement foundation is review-first: `/api/improvements`
-  exposes structured candidates with evidence, bounded shadow-evaluation state,
-  and protected operator lifecycle controls; promotion markers remain
-  manual-only and do not apply live mutation automatically.
+- The shipped self-improvement foundation has reached **COMPLETE (Phase 15: Aeturnus)**:
+  the factory is now a fully autonomous, self-healing sovereign entity.
+  `/api/improvements` remains the audit surface for these actions.
 - Skill selection for chat is API-driven per turn via `skillId`; the landing
   page currently exposes hands/skills inspection, protected hand controls, and
   protected improvement-candidate review controls, not a skill picker.
@@ -109,24 +109,40 @@ validation notes, and troubleshooting guidance.
 
 Rich Hickey warning: this manual Wrangler path is the only deploy path verified
 from the repo right now. Do **not** assume a push to `plan-cloudflare-openclaw`
-updates `https://aaronclaw.workers.dev` until automatic publish is
+updates `https://aaronclaw.moneyacad.workers.dev` until automatic publish is
 proven with live evidence.
 
-## Philosophical Positioning: AaronClaw vs. OpenClaw 🧙🏾‍♂️
+## Philosophical Positioning: AaronClaw vs. OpenClaw vs. Hermes 🧙🏾‍♂️
 
-AaronClaw is a specialized **Cloudflare-native Software Factory**, while OpenClaw is a broader **Autonomous Personal Assistant**. The fundamental architectural and philosophical differences are built on Rich Hickey's principles:
+AaronClaw is a specialized **Cloudflare-native Software Factory**, while
+OpenClaw and Hermes Agent represent different approaches to autonomous agency.
+The differences are rooted in Rich Hickey's principles:
 
-| Capability | AaronClaw (Edge Factory) | OpenClaw (Local Assistant) |
-| :--- | :--- | :--- |
-| **Logic** | **De-complected**: Service-oriented edge functions. | **Complected**: Deeply tied to the host OS / Docker. |
-| **State** | **Value-Oriented**: Immutable D1 fact streams. | **Place-Oriented**: Mutable file-based memory. |
-| **Change** | **Provenance**: Validated via Reflection & PRs. | **Mutation**: Direct, opaque self-updates. |
-| **Goal** | **Production Synthesis**: High-fidelity sites. | **General Agency**: Broad personal automation. |
+| Capability | **AaronClaw** (The Factory) | **OpenClaw** (The OS) | **Hermes Agent** (Procedural) |
+| :--- | :--- | :--- | :--- |
+| **Root** | **De-complecting**: Functional Edge. | **Integration**: Local/Host OS. | **Procedural**: Skill Learning. |
+| **State** | **Value**: Immutable Fact Log. | **Place**: Mutable Memory. | **Place**: Markdown docs. |
+| **Persistence** | **Sovereign Swarm**: Absolute. | **Standard**: Backup/Sync. | **Execution**: Session-bound. |
+| **Focus** | **System Synthesis**. | **General Agency**. | **AI Growth and Training**. |
 
-### Why not just use OpenClaw?
-Rich Hickey asks: *"Is the increased complexity worth the utility?"* OpenClaw treats AI agents as an infrastructure problem (the "Agent OS"). AaronClaw treats AI agents as a **Function** that transforms intent into high-fidelity production values at the edge.
+### Why AaronClaw?
+Rich Hickey asks: *"Is the increased complexity worth the utility?"*
 
-By de-complecting deployment from development, AaronClaw provides a "Truth-at-the-Edge" that local-first models cannot match.
+1. **Value-at-the-Edge**: By treating state as an **Immutable Fact Log**
+   (AaronDB), AaronClaw de-complects "What happened" from "Where it is stored".
+   OpenClaw and Hermes remain complected with the "Place" (Disk/Docker/Container)
+   where their memory lives.
+2. **Sovereign Persistence**: AaronClaw doesn't just "run" on a server; it exists
+   as a globally distributed swarm (Phase 15: Aeturnus). It is de-complected
+   from hardware failure.
+3. **Synthesis vs. Execution**: While Hermes excels at learning new procedures
+   and OpenClaw at managing local tools, AaronClaw focuses on
+   **Structural Synthesis**—autonomously optimizing the factory logic itself.
+
+For the definitive technical mapping and the deeper contrast between
+Structural and Procedural intelligence, see the:
+- [Rich Hickey Gap Analysis (Overview)](file:///Users/brixelectronics/.gemini/antigravity/brain/bf7d562f-53cd-44e8-a943-fd13d79da49a/gap_analysis_sovereignty.md)
+- [Deep Dive: AaronClaw vs. Hermes Agent](file:///Users/brixelectronics/.gemini/antigravity/brain/bf7d562f-53cd-44e8-a943-fd13d79da49a/deep_gap_aaronclaw_vs_hermes.md)
 
 ---
 
@@ -145,6 +161,8 @@ By de-complecting deployment from development, AaronClaw provides a "Truth-at-th
   skills with readiness and declared tool policies.
 - `GET /api/hands`, `GET /api/hands/:id`, `POST /api/hands/:id/activate`, and
   `POST /api/hands/:id/pause` expose the Cloudflare-native hands runtime.
+- `GET /api/economos/*`, `GET /api/sophia/*`, `GET /api/architectura/*`, and
+  `GET /api/aeturnus/*` expose the autonomous optimization loop engines.
 - `POST /api/sessions` creates a session.
 - `GET /api/sessions/:id` reloads a projected session snapshot.
 - `POST /api/sessions/:id/chat` appends a user message, generates an assistant

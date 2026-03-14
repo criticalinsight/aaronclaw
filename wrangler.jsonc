@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "aaronclaw",
   "main": "src/index.ts",
-  "compatibility_date": "2026-03-09",
+  "compatibility_date": "2026-03-13",
   "observability": {
     "enabled": true
   },
@@ -39,7 +39,8 @@
   "triggers": {
     "crons": [
       "*/30 * * * *",
-      "0 8 * * *"
+      "0 8 * * *",
+      "0 0 * * *"
     ]
   },
   "migrations": [

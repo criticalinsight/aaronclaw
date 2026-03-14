@@ -91,6 +91,11 @@ Current bundled hands/operators posture:
 - `regression-watch`
 - `provider-health-watchdog`
 - `docs-drift`
+- **Autonomous Engines (Phases 12-15)**:
+  - `economos` (Economic Auditor)
+  - `sophia` (Knowledge Generator)
+  - `architectura` (Refactor Engine)
+  - `aeturnus` (The Eternal Swarm)
 
 Current bundled skills posture:
 

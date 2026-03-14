@@ -52,6 +52,12 @@ export async function generateDocsSiteContent(): Promise<GithubFileChange[]> {
     content: renderArchitectureHtml(contract)
   });
 
+  // 7. Roadmap Dashboard
+  changes.push({
+    path: "roadmap.html",
+    content: renderRoadmapHtml({ bootstrap })
+  });
+
   return changes;
 }
 
@@ -69,6 +75,7 @@ function renderIndexHtml(bootstrap: any): string {
             <h1>AARONCLAW / SCHEMATIC</h1>
             <nav>
                 <a href="index.html" class="active">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
                 <a href="hands.html">Hands</a>
                 <a href="skills.html">Skills</a>
                 <a href="api.html">API</a>
@@ -254,6 +261,240 @@ footer {
     color: var(--muted);
     font-size: 0.8rem;
 }
+
+/* Roadmap Specific Styles */
+.roadmap-container {
+    display: flex;
+    flex-direction: column;
+    gap: 64px;
+    padding: 48px 0;
+}
+
+.roadmap-phase {
+    position: relative;
+    padding-left: 48px;
+    border-left: 2px solid var(--border);
+}
+
+.roadmap-phase::before {
+    content: '';
+    position: absolute;
+    left: -9px;
+    top: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 2px solid var(--border);
+}
+
+.roadmap-phase.active {
+    border-left-color: var(--accent);
+}
+
+.roadmap-phase.active::before {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent);
+}
+
+.roadmap-phase.complete {
+    border-left-color: #48bb78;
+}
+
+.roadmap-phase.complete::before {
+    background: #48bb78;
+    border-color: #48bb78;
+}
+
+.status-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    margin-bottom: 16px;
+}
+
+.led {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4a5568;
+}
+
+.pulse {
+    animation: led-pulse 2s infinite;
+    background: var(--accent);
+}
+
+.led-green { background: #48bb78; }
+
+@keyframes led-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(49, 130, 206, 0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(49, 130, 206, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(49, 130, 206, 0); }
+}
+
+.roadmap-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+}
+
+.roadmap-item {
+    font-size: 0.9rem;
+    color: var(--muted);
+    padding: 8px;
+    border: 1px dashed var(--border);
+    border-radius: 4px;
+}
+
+.muted { color: var(--muted); }
+
+/* Complection Gauge */
+.complection-gauge {
+    margin-top: 16px;
+    padding: 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+}
+
+.gauge-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+.gauge-track {
+    height: 12px;
+    background: #1a202c;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+}
+
+.gauge-fill {
+    height: 100%;
+    transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gauge-fill.simple { background: #48bb78; }
+.gauge-fill.complex { background: #ecc94b; }
+.gauge-fill.complected { background: #f56565; }
+
+.aether-console {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin-top: 1.5rem;
+    overflow: hidden;
+}
+
+.console-header {
+    background: var(--border-color);
+    padding: 0.5rem 1rem;
+    font-size: 0.8rem;
+    display: flex;
+    justify-content: space-between;
+    font-family: var(--font-mono);
+}
+
+.console-body {
+    padding: 1rem;
+}
+
+.console-body .code-block {
+    background: #000;
+    color: var(--accent-color);
+    padding: 1rem;
+    border-radius: 2px;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    margin-bottom: 1rem;
+    white-space: pre-wrap;
+    min-height: 80px;
+    border: 1px solid #333;
+}
+    .chronos-scrubber {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+    }
+
+    .scrubber-controls {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .scrubber-slider {
+        flex-grow: 1;
+        accent-color: var(--accent-color);
+        cursor: pointer;
+    }
+
+    .scrubber-label {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        min-width: 160px;
+    }
+    .oracle-projection {
+        background: #1a202c;
+        border: 1px solid var(--accent-color);
+        border-radius: 4px;
+        margin-top: 1.5rem;
+        padding: 1rem;
+    }
+
+    .projection-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+        border-bottom: 1px solid #333;
+        padding-bottom: 0.5rem;
+    }
+
+    .delta-badge {
+        font-family: var(--font-mono);
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 0.75rem;
+    }
+
+    .sovereign-health {
+        background: rgba(45, 55, 72, 0.4);
+        border: 1px dashed var(--accent-color);
+        border-radius: 8px;
+        padding: 1.5rem;
+        margin-top: 1rem;
+    }
+
+    .health-stat {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 0.5rem;
+        font-size: 0.85rem;
+    }
+
+    .status-alert {
+        color: #f56565;
+        font-weight: bold;
+        animation: blink 2s infinite;
+    }
+
+    @keyframes blink {
+        0% { opacity: 1; }
+        50% { opacity: 0.5; }
+        100% { opacity: 1; }
+    }
+    .delta-positive { color: #f56565; background: rgba(245, 101, 101, 0.1); }
+    .delta-negative { color: #48bb78; background: rgba(72, 187, 120, 0.1); }
 `;
 }
 
@@ -271,6 +512,7 @@ function renderHandsHtml(hands: readonly any[]): string {
             <h1>AARONCLAW / SCHEMATIC</h1>
             <nav>
                 <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
                 <a href="hands.html" class="active">Hands</a>
                 <a href="skills.html">Skills</a>
                 <a href="api.html">API</a>
@@ -312,6 +554,7 @@ function renderSkillsHtml(skills: readonly any[]): string {
             <h1>AARONCLAW / SCHEMATIC</h1>
             <nav>
                 <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
                 <a href="hands.html">Hands</a>
                 <a href="skills.html" class="active">Skills</a>
                 <a href="api.html">API</a>
@@ -353,6 +596,7 @@ function renderApiHtml(operatorRoutes: readonly string[], sessionRoutes: readonl
             <h1>AARONCLAW / SCHEMATIC</h1>
             <nav>
                 <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
                 <a href="hands.html">Hands</a>
                 <a href="skills.html">Skills</a>
                 <a href="api.html" class="active">API</a>
@@ -393,6 +637,7 @@ function renderArchitectureHtml(contract: any): string {
             <h1>AARONCLAW / SCHEMATIC</h1>
             <nav>
                 <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
                 <a href="hands.html">Hands</a>
                 <a href="skills.html">Skills</a>
                 <a href="api.html">API</a>
@@ -423,6 +668,455 @@ function renderArchitectureHtml(contract: any): string {
             </div>
         </div>
     </main>
+</body>
+</html>`;
+}
+
+export function renderRoadmapHtml(data: any = {}): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Roadmap | AaronClaw Docs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AARONCLAW / SCHEMATIC</h1>
+            <nav>
+                <a href="index.html">Overview</a>
+                <a href="roadmap.html" class="active">Roadmap</a>
+                <a href="hands.html">Hands</a>
+                <a href="skills.html">Skills</a>
+                <a href="api.html">API</a>
+                <a href="architecture.html">Architecture</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        <h2>Mission Roadmap</h2>
+        <p class="muted">The evolutionary trajectory of the AaronClaw Software Factory.</p>
+
+        <div class="roadmap-container">
+            <!-- Phase 1 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 1: Seed [Substrate]</span>
+                </div>
+                <div class="card">
+                    <h3>Infrastructure Primitives</h3>
+                    <p>Established core dispatcher, GitHub coordinator, and tool policies. Truth is managed via AaronDB substrate.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">GitHub Integration</div>
+                        <div class="roadmap-item">Wrangler Orchestration</div>
+                        <div class="roadmap-item">Audit Foundation</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 2 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 2: Birth [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Automated Deployment Loop</h3>
+                    <p>Closed the loop between code generation and live execution. Enabled one-click spawning of new edge workers.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">CI/CD Lifecycle</div>
+                        <div class="roadmap-item">Mission Control: Telemetry</div>
+                        <div class="roadmap-item">Mission Control: Terminal</div>
+                        <div class="roadmap-item">App Provisioning</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 3 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 3: Growth [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Autonomous Lifecycle</h3>
+                    <p>Observability and self-improvement loops. Fleet monitoring and automated refactoring via GitHub PRs.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Fleet Surveillance</div>
+                        <div class="roadmap-item">Hand History Visuals</div>
+                        <div class="roadmap-item">Self-Improvement Loop</div>
+                        <div class="roadmap-item">Vulnerability Scanner</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 4 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 4: Maturity [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Fleet Intelligence</h3>
+                    <p>Cross-pollination of knowledge across the entire fleet. AI-native governance and architectural purity enforcement.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Global Knowledge Vault</div>
+                        <div class="roadmap-item">Multi-Tenant Factory</div>
+                        <div class="roadmap-item">AI-Native Governance</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 5 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 5: Singularity [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Autonomous Operations</h3>
+                    <p>Full closure of the self-improvement loop with CI/CD failure ingestion and auto-pilot deployments.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">CI/CD Failure Wiring</div>
+                        <div class="roadmap-item">Auto-Pilot Deployment</div>
+                        <div class="roadmap-item">Economic Self-Optimization</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 6 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 6: Nexus [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Multi-Factory Mesh</h3>
+                    <p>Establishing a distributed knowledge and state substrate across multiple AaronClaw factory instances.</p>
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">D1 Replay Mesh</div>
+                        <div class="roadmap-item">Cross-Account Identity</div>
+                        <div class="roadmap-item">Peer Knowledge Sync</div>
+                        <div class="roadmap-item">Consensus Engine</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 7 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 7: Guardian [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Proactive Governance</h3>
+                    <p>Automatically rejecting architectural drift and unnecessary complexity via the Complection Engine.</p>
+                    
+                    <div class="complection-gauge">
+                        <div class="gauge-header">
+                            <span>Complection Gauge</span>
+                            <span class="muted">Status: Analyzing Fleet...</span>
+                        </div>
+                        <div class="gauge-track">
+                            <div class="gauge-fill simple" style="width: 15%"></div>
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Complection Engine</div>
+                        <div class="roadmap-item">Governance Bouncer</div>
+                        <div class="roadmap-item">Simplicity Gating</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 8 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 8: Aether [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Intent-Driven Synthesis</h3>
+                    <p>Moving from text-based prompting to declarative domain modeling and automated synthesis.</p>
+                    
+                    <div class="aether-console">
+                        <div class="console-header">
+                            <span>Aether Synthesis Console</span>
+                            <span class="muted">Ready for Domain Intent...</span>
+                        </div>
+                        <div class="console-body">
+                            <div class="code-block">
+{
+  "domain": "inventory/warehouse",
+  "attributes": [
+    { "name": "sku", "type": "string" },
+    { "name": "quantity", "type": "number" }
+  ]
+}</div>
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Domain Declarations</div>
+                        <div class="roadmap-item">Aether Engine</div>
+                        <div class="roadmap-item">Automated Spawning</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 9 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 9: Chronos [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Temporal Fact Auditing</h3>
+                    <p>Replaying architectural evolution via "As-Of" queries on the immutable fact log.</p>
+                    
+                    <div class="chronos-scrubber">
+                        <div class="scrubber-controls">
+                            <span class="scrubber-label">T-Minus: <span id="chronos-val">Current</span></span>
+                            <input type="range" class="scrubber-slider" min="0" max="100" value="100" id="chronos-input">
+                        </div>
+                        <p class="muted" style="margin-top: 0.5rem; font-size: 0.75rem;">🧙🏾‍♂️ Scrub back in time to audit the factory transformation.</p>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">As-Of Resolvers</div>
+                        <div class="roadmap-item">Historical Replay</div>
+                        <div class="roadmap-item">Fact Provenance</div>
+                        <div class="roadmap-item">Temporal Integrity</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 10 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 10: Oracle [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Predictive Simulation</h3>
+                    <p>Speculative optimization via architectural sandboxing. Foreseeing complexity before it emerges.</p>
+                    
+                    <div class="oracle-projection">
+                        <div class="projection-header">
+                            <span>Oracle Projection: <code>#742-Spawn</code></span>
+                            <span class="delta-badge delta-positive">+42 Complection</span>
+                        </div>
+                        <p style="font-size: 0.85rem; margin-bottom: 0.5rem;"><strong>Risk:</strong> Cross-domain coupling detected between <code>inventory</code> and <code>finance</code>.</p>
+                        <div class="gauge-track" style="height: 6px;">
+                            <div class="gauge-fill complex" style="width: 65%"></div>
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Virtual Projection</div>
+                        <div class="roadmap-item">Speculative ROI</div>
+                        <div class="roadmap-item">Complexity Gating</div>
+                        <div class="roadmap-item">Structural Mirror</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 11 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 11: Sovereign [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Infrastructural Self-Assembly</h3>
+                    <p>Autonomic resource orchestration and lifecycle sovereignty. The factory is now self-sustaining.</p>
+                    
+                    <div class="sovereign-health">
+                        <div class="health-stat">
+                            <span>Active Nodes</span>
+                            <span class="value">${data.sovereign?.nodes ?? 1}</span>
+                        </div>
+                        <div class="health-stat">
+                            <span>Structural Drift</span>
+                            <span class="${data.sovereign?.driftDetected ? 'status-alert' : ''}">
+                                ${data.sovereign?.driftDetected ? 'DETECTED' : 'None'}
+                            </span>
+                        </div>
+                        <div class="health-stat">
+                            <span>Last Rebalance</span>
+                            <span class="value" style="font-size: 0.7rem;">${data.sovereign?.lastRebalance ?? 'Never'}</span>
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Self-Provisioning</div>
+                        <div class="roadmap-item">Drift Detection</div>
+                        <div class="roadmap-item">Secret Rotation</div>
+                        <div class="roadmap-item">Auth Lifecycle</div>
+                    </div>
+                </div>
+            </section>
+
+            <h2 style="margin: 2rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">Transcendence Horizon</h2>
+
+            <!-- Phase 12 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 12: Economos [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Economic Self-Management</h3>
+                    <p>Autonomous cost and efficiency auditing. Treating complexity as an architectural expense.</p>
+                    
+                    <div class="economos-efficiency">
+                        <div class="efficiency-header">
+                            <span>Overall Efficiency Score</span>
+                            <span class="value">${data.economos?.overallEfficiencyScore ?? 92}%</span>
+                        </div>
+                        <div class="gauge-track">
+                            <div class="gauge-fill" style="width: ${data.economos?.overallEfficiencyScore ?? 92}%"></div>
+                        </div>
+                        <div class="efficiency-stats">
+                            <div class="stat">
+                                <span>Stateful Places</span>
+                                <span>${data.economos?.totalStatefulPlaces ?? 142}</span>
+                            </div>
+                            <div class="stat">
+                                <span>Complexity Cost</span>
+                                <span>LOW</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Cost Auditing</div>
+                        <div class="roadmap-item">Latency Insight</div>
+                        <div class="roadmap-item">Resource Optimization</div>
+                        <div class="roadmap-item">Efficiency Facts</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 13 -->
+            <section class="roadmap-phase complete">
+                <div class="status-indicator">
+                    <span class="led led-green"></span>
+                    <span>Phase 13: Sophia [Complete]</span>
+                </div>
+                <div class="card">
+                    <h3>Knowledge Generation</h3>
+                    <p>Recursive log analysis to synthesize new skills and optimization patterns.</p>
+                    
+                    <div class="scholar-yield">
+                        <div class="yield-header">
+                            <span>Knowledge Yield</span>
+                            <span class="value">${data.sophia?.totalKnowledgeYield ?? 1} Discovered</span>
+                        </div>
+                        <div class="yield-patterns">
+                            ${(data.sophia?.patternsDiscovered ?? []).map((p: any) => `
+                                <div class="pattern-item">
+                                    <div class="pattern-meta">
+                                        <strong>${p.name}</strong>
+                                        <span class="confidence">${Math.round(p.confidence * 100)}% Conf.</span>
+                                    </div>
+                                    <p>${p.description}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Log Mining</div>
+                        <div class="roadmap-item">Skill Synthesis</div>
+                        <div class="roadmap-item">Pattern Discovery</div>
+                        <div class="roadmap-item">Meta-Reflection</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 14 -->
+            <section class="roadmap-phase active">
+                <div class="status-indicator">
+                    <span class="led led-blue"></span>
+                    <span>Phase 14: Architectura [Active]</span>
+                </div>
+                <div class="card">
+                    <h3>Structural Optimization</h3>
+                    <p>Autonomous de-complecting propositions based on synthesized knowledge patterns.</p>
+                    
+                    <div class="architectura-loop">
+                        <div class="loop-header">
+                            <span>Active Optimization Proposals</span>
+                            <span class="value">${data.architectura?.propositions.length ?? 0} Pending</span>
+                        </div>
+                        <div class="proposition-list">
+                            ${(data.architectura?.propositions ?? []).map((p: any) => `
+                                <div class="prop-item">
+                                    <div class="prop-meta">
+                                        <strong>${p.type}</strong>
+                                        <span class="gain">+${p.estimatedSimplicityGain}% Simplicity</span>
+                                    </div>
+                                    <code>${p.targetModule}</code>
+                                    <p style="font-size: 0.8rem; margin-top: 0.2rem; opacity: 0.8;">${p.rationale ?? 'Structural alignment proposed.'}</p>
+                                </div>
+                            `).join('')}
+                            ${(data.architectura?.propositions ?? []).length === 0 ? '<p style="opacity: 0.5; font-size: 0.8rem;">Monitoring structural complexity for optimization triggers...</p>' : ''}
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">De-complecting</div>
+                        <div class="roadmap-item">Auto-Refactor</div>
+                        <div class="roadmap-item">Structural PRs</div>
+                        <div class="roadmap-item">Self-Shaping</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Phase 15 -->
+            <section class="roadmap-phase active">
+                <div class="status-indicator">
+                    <span class="led led-blue"></span>
+                    <span>Phase 15: Aeturnus [Active]</span>
+                </div>
+                <div class="card">
+                    <h3>The Eternal Swarm</h3>
+                    <p>Absolute resilience via full swarm decentralization and cross-cloud persistence.</p>
+                    
+                    <div class="aeturnus-swarm">
+                        <div class="swarm-header">
+                            <span>Swarm Health</span>
+                            <span class="value">${data.aeturnus?.overallHealth ?? 0}%</span>
+                        </div>
+                        <div class="swarm-grid">
+                            ${(data.aeturnus?.activeNodes ?? []).map((n: any) => `
+                                <div class="node-status ${n.status}">
+                                    <strong>${n.nodeId}</strong>
+                                    <span>${n.type} | ${n.latency}ms</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+
+                    <div class="roadmap-grid">
+                        <div class="roadmap-item">Decentralized</div>
+                        <div class="roadmap-item">Self-Healing</div>
+                        <div class="roadmap-item">Persistence</div>
+                        <div class="roadmap-item">Immortal</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+    <footer>
+        <div class="container">
+            <p>🧙🏾‍♂️ "Identity is persistence. Roadmap is direction."</p>
+        </div>
+    </footer>
 </body>
 </html>`;
 }

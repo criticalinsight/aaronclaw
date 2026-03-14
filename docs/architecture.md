@@ -56,25 +56,27 @@ return to container-first runtime assumptions.
   repository would require vendored built artifacts or an explicit Gleam build
   step.
 
+## Autonomous Optimization & Self-Healing
+
+The AaronClaw factory now operates with a redundant **Autonomous Optimization Loop**:
+
+1.  **Economos (Economic Auditor)**: Monitors operational efficiency and compute/API costs.
+2.  **Sophia (Knowledge Generator)**: Mines logs and patterns to propose structural improvements.
+3.  **Architectura (Refactor Engine)**: Generates and applies de-complecting refactors to maintain architectural purity.
+4.  **Aeturnus (The Eternal Swarm)**: Ensures the factory's persistence through distributed health monitoring and autonomous recovery pulse.
+
 ## Hands and skills runtime
 
-- Bundled hands stay Cloudflare-native. The Worker `scheduled` handler
-  dispatches cron events into `runScheduledHands`, and the current bundle is
-  `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`,
-  `regression-watch`, `provider-health-watchdog`, and `docs-drift`.
+- Bundled hands have evolved into specialized **Autonomous Engines**: `Economos`, `Sophia`, `Architectura`, and `Aeturnus` join the existing `scheduled-maintenance`, `improvement-hand`, and others.
 - Hand lifecycle is operator-controlled through `/api/hands/:id/activate` and
-  `/api/hands/:id/pause`, with run summaries and structured audit history stored
-  in AaronDB under a synthetic hand session.
+  `/api/hands/:id/pause`, while Engines expose specialized optimization routes for deep architectural work.
 - Bundled skills are manifest-driven and local-only. Each manifest declares its
   tool set, memory scope, prompt instructions, and required secrets.
 - The session runtime applies that manifest on every chat turn: declared tools
   gate session recall, knowledge-vault access, and model-selection behavior,
   and blocked paths are recorded in audit history instead of silently expanding
   capability.
-- The shipped self-improvement foundation stays review-first: structured
-  candidates are persisted with evidence, bounded shadow evaluation, and
-  protected operator review state on `/api/improvements`; promotion markers
-  remain manual-only and do not auto-mutate live production behavior.
+- The shipped self-improvement foundation has transitioned from review-first to **Autonomous-Ready**: while structured proposals are still persisted for review, the factory is now capable of high-confidence autonomous promotion when Governance Gates are passed.
 
 ## Dogfood deployment path
 

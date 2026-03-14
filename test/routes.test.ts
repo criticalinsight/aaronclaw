@@ -81,16 +81,16 @@ describe("buildBootstrapStatus", () => {
     });
   });
 
-  it("renders the existing landing page with protected operator controls for hands, skills, and improvement candidates", () => {
+  it("renders the high-fidelity Mission Control dashboard with interactive panels for hands, skills, and improvements", () => {
     const html = renderLandingPage({ authRequired: true, defaultProvider: "gemini" });
 
-    expect(html).toContain("Operator controls");
-    expect(html).toContain("Refresh operator data");
-    expect(html).toContain("/api/hands");
-    expect(html).toContain("/api/skills");
-    expect(html).toContain("/api/improvements");
-    expect(html).toContain("Improvement candidates");
-    expect(html).toContain("Recent audit");
+    expect(html).toContain("Mission Control");
+    expect(html).toContain("Identity");
+    expect(html).toContain("Terminal Sync");
+    expect(html).toContain("Substrate Status");
+    expect(html).toContain("Hands");
+    expect(html).toContain("Skills");
+    expect(html).toContain("Improvements");
   });
 });
 

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Skills | AaronClaw Docs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AARONCLAW / SCHEMATIC</h1>
+            <nav>
+                <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
+                <a href="hands.html">Hands</a>
+                <a href="skills.html" class="active">Skills</a>
+                <a href="api.html">API</a>
+                <a href="architecture.html">Architecture</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        <h2>System Skills</h2>
+        <p class="muted">Skills are specialized capabilities deployed to workers, enabling complex reasoning and tool usage.</p>
+        <div class="grid">
+            
+            <div class="card">
+                <h3>AaronDB research skill</h3>
+                <p>Keeps answers grounded in session recall plus the existing Cloudflare-native knowledge-vault path.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>aarondb-research</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, knowledge-vault</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Gemini review skill</h3>
+                <p>Tightens response style for review work and requires Gemini key material without changing the Cloudflare runtime model.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>gemini-review</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, model-selection</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Incident triage skill</h3>
+                <p>Explains failures from bounded session, hand, audit, and runtime/provider evidence.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>incident-triage</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-history, hand-history, audit-history, runtime-state</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Hickey simplicity lens</h3>
+                <p>Analyzes proposed code for 'complecting' patterns.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>hickey-simplicity-lens</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, hickey-simplicity-lens</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Datalog query expert</h3>
+                <p>Provides high-precision guidance for AaronDB.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>datalog-query-expert</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, datalog-query-expert</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Rust borrow oracle</h3>
+                <p>Specialized for FFI and Rust safety.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>rust-borrow-oracle</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, rust-borrow-oracle</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Cloudflare edge architect</h3>
+                <p>Focused on Durable Object, D1, and Workers.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>cloudflare-edge-architect</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, cloudflare-edge-architect</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>SQLite migration guide</h3>
+                <p>Expertise in designed idempotent D1 migrations.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>sqlite-migration-guide</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, sqlite-migration-guide</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Durable Object migration advisor</h3>
+                <p>Guidance for moving state to Workers substrate.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>durable-object-migration-advisor</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, durable-object-migration-advisor</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Security posture audit</h3>
+                <p>Identifies permission gaps and sensitive exposures.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>security-posture-audit</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> audit-history, security-posture-audit</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Performance tuning skill</h3>
+                <p>Suggests latency optimizations.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>performance-tuning-skill</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> runtime-state, performance-tuning-skill</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Gap analysis pro</h3>
+                <p>Compares implementations against specifications.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>gap-analysis-pro</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, gap-analysis-pro</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Provenance investigator</h3>
+                <p>Traces history of a specific fact.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>provenance-investigator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> audit-history, provenance-investigator</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Automated doc writer</h3>
+                <p>Formats runtime state into documentation.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>automated-doc-writer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> runtime-state, automated-doc-writer</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Test scenario designer</h3>
+                <p>Proposes Vitest cases.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>test-scenario-designer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, test-scenario-designer</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>De-coupling assistant</h3>
+                <p>Identifies modules that should be split.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>de-coupling-assistant</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, de-coupling-assistant</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Vendored source guide</h3>
+                <p>Specialized for navigating vendor/ directory.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>vendored-source-guide</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, vendored-source-guide</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Operational economist</h3>
+                <p>Analyzes cost/token trade-offs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>operational-economist</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> runtime-state, operational-economist</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Intent clarifier</h3>
+                <p>Helps operators clarify ambiguous goals.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>intent-clarifier</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-history, intent-clarifier</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Improvement promoter</h3>
+                <p>Guides review and promotion of candidates.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>improvement-promoter</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, improvement-promoter</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Vector query engineer</h3>
+                <p>Optimizes hyper-recall queries.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>vector-query-engineer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> knowledge-vault, vector-query-engineer</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Protocol designer</h3>
+                <p>Assists in drafting internal APIs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>protocol-designer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, protocol-designer</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Release note generator</h3>
+                <p>Compiles transaction history into change logs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>release-note-generator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> audit-history, release-note-generator</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>State visualization oracle</h3>
+                <p>Describes state transitions as DAGs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>state-visualization-oracle</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, state-visualization-oracle</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Shadow eval coordinator</h3>
+                <p>Manages testing of experimental skills.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>shadow-eval-coordinator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> audit-history, shadow-eval-coordinator</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Fact integrity checker</h3>
+                <p>Prevents assertion of contradictory facts.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>fact-integrity-checker</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, fact-integrity-checker</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Substrate migration pro</h3>
+                <p>Advice on moving facts between buckets.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>substrate-migration-pro</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> runtime-state, substrate-migration-pro</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Skill prompt optimizer</h3>
+                <p>Improves instructions for other skills.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>skill-prompt-optimizer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, skill-prompt-optimizer</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Wrangler orchestration</h3>
+                <p>Expertise in managing Cloudflare deployments, generating wrangler.toml, and handling environment secrets.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>wrangler-orchestration</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-worker</li>
+                    <li><strong>Tools:</strong> session-recall, wrangler-orchestration</li>
+                </ul>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

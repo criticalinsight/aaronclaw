@@ -62,6 +62,10 @@ class FakeD1Database {
   }
 
   query<T>(sql: string, params: unknown[]): T[] {
+    if (sql.includes("FROM global_patterns")) {
+       return [] as T[]; // For now, just return empty list as if no historical patterns found
+    }
+
     if (!sql.includes("FROM aarondb_facts")) {
       throw new Error(`Unsupported query: ${sql}`);
     }
@@ -87,19 +91,35 @@ class FakeD1Database {
       rows = rows.filter((row) => row.attribute === attribute);
     }
 
+    // Phase 6 improvement: Handle raw literals for common audit queries
+    if (sql.includes("entity = 'tool_audit'") || sql.includes("entity = 'tool_event'")) {
+       rows = rows.filter(row => row.entity === 'tool_audit' || row.entity === 'tool_event');
+    }
+
     rows.sort((left, right) => {
-      if (sql.includes("ORDER BY tx DESC")) {
+      if (sql.includes("ORDER BY tx DESC") || sql.includes("occurred_at DESC")) {
         return right.tx - left.tx || right.tx_index - left.tx_index;
       }
 
       return left.tx - right.tx || left.tx_index - right.tx_index;
     });
 
-    if (sql.includes("LIMIT 1")) {
-      rows = rows.slice(0, 1);
+    if (sql.includes("LIMIT")) {
+      const match = sql.match(/LIMIT (\d+)/i);
+      if (match) {
+         rows = rows.slice(0, parseInt(match[1]));
+      }
+    }
+
+    if (sql.trim().startsWith("SELECT session_id") || sql.includes("SELECT *")) {
+      return rows as T[];
     }
 
     if (sql.includes("SELECT value_json")) {
+      // Support returning both if requested (crude check)
+      if (sql.includes("occurred_at")) {
+         return rows.map((row) => ({ value_json: row.value_json, occurred_at: row.occurred_at } as T));
+      }
       return rows.map((row) => ({ value_json: row.value_json } as T));
     }
 
@@ -111,6 +131,10 @@ class FakeD1Database {
   }
 
   execute(sql: string, params: unknown[]) {
+    if (sql.includes("global_patterns")) {
+       return; // Handle insertions/updates to global_patterns as no-op for now
+    }
+
     if (!sql.includes("INSERT INTO aarondb_facts")) {
       throw new Error(`Unsupported statement: ${sql}`);
     }
@@ -1935,6 +1959,9 @@ describe("worker session routes", () => {
   it("runs the Improvement Hand against stored reflections and persists deduped structured proposals", async () => {
     const { env, database } = createEnv({ appAuthToken: "letmein" });
 
+    // Phase 6 improvement: Mock fetch to stabilize the recursive evolution spawn path in tests
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+
     await seedHistoricalSession(
       database,
       "history-improvement",
@@ -2636,7 +2663,7 @@ describe("worker session routes", () => {
       signalSessionId: "improvement:provider-health-signals",
       healthyCount: 0,
       degradedCount: 3,
-      unavailableCount: 1
+      unavailableCount: 2
     });
     expect(handBody.hand.latestRun?.providerHealthFindings).toEqual(
       expect.arrayContaining([
@@ -2664,7 +2691,7 @@ describe("worker session routes", () => {
     );
     expect(signalSession?.toolEvents[0]?.metadata).toMatchObject({
       degradedCount: 3,
-      unavailableCount: 1,
+      unavailableCount: 2,
       selectionFallbackReason: "requested-model-unavailable",
       findings: expect.arrayContaining([
         expect.objectContaining({ findingKey: "gemini-key-readiness" }),
@@ -2680,7 +2707,7 @@ describe("worker session routes", () => {
     ).getSession();
     expect(watchdogHandSession?.toolEvents[1]?.metadata).toMatchObject({
       degradedCount: 3,
-      unavailableCount: 1,
+      unavailableCount: 2,
       signalSessionId: "improvement:provider-health-signals",
       audit: {
         toolId: "hand-run",

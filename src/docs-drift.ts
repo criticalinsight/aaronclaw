@@ -61,7 +61,7 @@ export const defaultDocsContract: DocsContract = {
       path: "docs/setup.md",
       section: "What to expect locally",
       excerpt:
-        "The bundled hands currently shipped are `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`, `regression-watch`, `provider-health-watchdog`, and `docs-drift`; each remains paused until an operator activates it."
+        "The bundled hands currently shipped are `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`, `regression-watch`, `provider-health-watchdog`, `docs-drift`, `ttl-garbage-collector`, `orphan-fact-cleanup`, `vector-index-reconciler`, `daily-briefing-generator`, `github-coordinator`, `docs-factory`, `error-cluster-detect`, `credential-leak-watchdog`, `usage-spike-analyzer`, `latent-reflection-miner`, `latency-anomaly-detector`, `tool-performance-baseline`, `stale-session-archiver`, `active-session-prewarmer`, `durable-object-storage-watch`, `dependency-drifter`, `secret-rotation-check`, `audit-log-compactor`, `schema-integrity-checker`, `token-budget-enforcer`, `prompt-injection-watchdog`, `reproducibility-guard`, `context-optimizer`, `sentiment-drift-watch`, `capability-mapper`, `knowledge-vault-pruner`, `compliance-sweeper`, and `website-factory`; each remains paused until an operator activates it."
     },
     values: [
       "scheduled-maintenance",
@@ -69,7 +69,35 @@ export const defaultDocsContract: DocsContract = {
       "user-correction-miner",
       "regression-watch",
       "provider-health-watchdog",
-      "docs-drift"
+      "docs-drift",
+      "ttl-garbage-collector",
+      "orphan-fact-cleanup",
+      "vector-index-reconciler",
+      "daily-briefing-generator",
+      "github-coordinator",
+      "docs-factory",
+      "error-cluster-detect",
+      "credential-leak-watchdog",
+      "usage-spike-analyzer",
+      "latent-reflection-miner",
+      "latency-anomaly-detector",
+      "tool-performance-baseline",
+      "stale-session-archiver",
+      "active-session-prewarmer",
+      "durable-object-storage-watch",
+      "dependency-drifter",
+      "secret-rotation-check",
+      "audit-log-compactor",
+      "schema-integrity-checker",
+      "token-budget-enforcer",
+      "prompt-injection-watchdog",
+      "reproducibility-guard",
+      "context-optimizer",
+      "sentiment-drift-watch",
+      "capability-mapper",
+      "knowledge-vault-pruner",
+      "compliance-sweeper",
+      "website-factory"
     ]
   },
   documentedSkills: {
@@ -77,9 +105,39 @@ export const defaultDocsContract: DocsContract = {
       path: "docs/setup.md",
       section: "What to expect locally",
       excerpt:
-        "The bundled skills currently shipped are `aarondb-research`, `gemini-review`, and `incident-triage`."
+        "The bundled skills currently shipped are `aarondb-research`, `gemini-review`, `incident-triage`, `hickey-simplicity-lens`, `datalog-query-expert`, `rust-borrow-oracle`, `cloudflare-edge-architect`, `sqlite-migration-guide`, `durable-object-migration-advisor`, `security-posture-audit`, `performance-tuning-skill`, `gap-analysis-pro`, `provenance-investigator`, `automated-doc-writer`, `test-scenario-designer`, `de-coupling-assistant`, `vendored-source-guide`, `operational-economist`, `intent-clarifier`, `improvement-promoter`, `vector-query-engineer`, `protocol-designer`, `release-note-generator`, `state-visualization-oracle`, `shadow-eval-coordinator`, `fact-integrity-checker`, `substrate-migration-pro`, `skill-prompt-optimizer`, and `wrangler-orchestration`."
     },
-    values: ["aarondb-research", "gemini-review", "incident-triage"]
+    values: [
+      "aarondb-research",
+      "gemini-review",
+      "incident-triage",
+      "hickey-simplicity-lens",
+      "datalog-query-expert",
+      "rust-borrow-oracle",
+      "cloudflare-edge-architect",
+      "sqlite-migration-guide",
+      "durable-object-migration-advisor",
+      "security-posture-audit",
+      "performance-tuning-skill",
+      "gap-analysis-pro",
+      "provenance-investigator",
+      "automated-doc-writer",
+      "test-scenario-designer",
+      "de-coupling-assistant",
+      "vendored-source-guide",
+      "operational-economist",
+      "intent-clarifier",
+      "improvement-promoter",
+      "vector-query-engineer",
+      "protocol-designer",
+      "release-note-generator",
+      "state-visualization-oracle",
+      "shadow-eval-coordinator",
+      "fact-integrity-checker",
+      "substrate-migration-pro",
+      "skill-prompt-optimizer",
+      "wrangler-orchestration"
+    ]
   },
   documentedOperatorRoutes: {
     source: {

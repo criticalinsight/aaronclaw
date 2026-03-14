@@ -88,7 +88,8 @@ At query time, AaronClaw compares the query terms to each event's stored recallt
 
 - Losing Durable Object memory does not lose the session.
 - Reloading the browser or restarting a Durable Object still permits replay.
-- The session state model is inspectable and deterministic enough for handoff andtroubleshooting.
+- The session state model is inspectable and deterministic enough for handoff and
+  troubleshooting of both human-led sessions and autonomous optimization engines.
 - Workers AI is optional for persistence: state durability comes from D1 facts.
 
 For route-level behavior, see `docs/runtime.md`.

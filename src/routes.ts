@@ -1,4 +1,11 @@
 import { buildAaronDbEdgeSubstrateStatus } from "./aarondb-edge-substrate";
+import { discoverResources, generateWranglerConfig } from "./wiring-engine";
+import { createGithubRepository, pushFilesToGithub, setupGithubActions } from "./github-coordinator";
+
+export interface Env {
+  AARONDB: D1Database;
+  GITHUB_TOKEN: string;
+}
 
 interface BootstrapStatusOptions {
   authRequired?: boolean;
@@ -74,7 +81,14 @@ export function buildBootstrapStatus(options: BootstrapStatusOptions = {}) {
       "POST /api/sessions/:id/chat",
       "POST /api/sessions/:id/messages",
       "POST /api/sessions/:id/tool-events",
-      "GET /api/sessions/:id/recall?q=..."
+      "GET /api/sessions/:id/recall?q=...",
+      "POST /api/sessions/:id/sync"
+    ],
+    adminRoutes: [
+      "GET /api/telemetry",
+      "POST /api/spawn",
+      "GET /api/nexus/peers",
+      "POST /api/nexus/peers"
     ]
   } as const;
 }
@@ -85,7 +99,7 @@ export function extractSessionId(pathname: string): string | null {
 
 export function parseSessionRoute(pathname: string): {
   sessionId: string;
-  action: "state" | "chat" | "messages" | "tool-events" | "recall";
+  action: "state" | "chat" | "messages" | "tool-events" | "recall" | "sync";
 } | null {
   const parts = pathname.split("/").filter(Boolean);
 
@@ -104,7 +118,8 @@ export function parseSessionRoute(pathname: string): {
     action !== "chat" &&
     action !== "messages" &&
     action !== "tool-events" &&
-    action !== "recall"
+    action !== "recall" &&
+    action !== "sync"
   ) {
     return null;
   }
@@ -238,134 +253,498 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${status.service}</title>
+    <title>${status.service} // Mission Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <style>
-      :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-      body { margin: 0; background: #111827; color: #e5e7eb; }
-      main { max-width: 1100px; margin: 0 auto; padding: 24px; display: grid; gap: 16px; }
-      h1, h2, h3, p { margin: 0; }
-      .card { background: #1f2937; border: 1px solid #374151; border-radius: 16px; padding: 16px; }
-      .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-      label { display: grid; gap: 6px; font-size: 14px; }
-      input, textarea, button { border-radius: 10px; border: 1px solid #4b5563; background: #0f172a; color: inherit; padding: 10px 12px; font: inherit; }
-      textarea { min-height: 120px; resize: vertical; }
-      button { background: #2563eb; border-color: #2563eb; cursor: pointer; }
-      button.secondary { background: transparent; }
-      button:disabled { opacity: 0.6; cursor: wait; }
-      .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-      .session-meta, .status { font-size: 14px; color: #cbd5e1; }
-      .stack { display: grid; gap: 12px; }
-      .operator-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-      .operator-card { display: grid; gap: 10px; border: 1px solid #374151; border-radius: 12px; padding: 12px; background: #111827; }
-      .section-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
-      .muted { font-size: 14px; color: #94a3b8; }
-      .pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 10px; background: #0f172a; border: 1px solid #4b5563; font-size: 12px; }
-      .pill.active, .pill.ready, .pill.succeeded, .pill.approved, .pill.promoted { border-color: #10b981; color: #6ee7b7; }
-      .pill.paused, .pill.missing-secrets, .pill.failed, .pill.shadowing { border-color: #f59e0b; color: #fbbf24; }
-      .pill.rejected, .pill.rolled-back { border-color: #ef4444; color: #fca5a5; }
-      .detail-list, .list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; color: #cbd5e1; }
-      details { border-top: 1px solid #374151; padding-top: 10px; }
-      details summary { cursor: pointer; color: #93c5fd; }
-      .messages { display: grid; gap: 12px; min-height: 260px; }
-      .message { border: 1px solid #374151; border-radius: 12px; padding: 12px; background: #111827; }
-      .message.user { border-color: #2563eb; }
-      .message.assistant { border-color: #10b981; }
-      .message-header { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: #93c5fd; margin-bottom: 8px; }
-      .message.assistant .message-header { color: #6ee7b7; }
-      .empty { color: #94a3b8; font-style: italic; }
-      code { background: #0b1120; padding: 2px 6px; border-radius: 6px; }
+      :root {
+        --bg: #0b0f1a;
+        --panel-bg: rgba(20, 26, 42, 0.7);
+        --accent: #2dd4bf; /* Bioluminescent Teal */
+        --accent-glow: rgba(45, 212, 191, 0.2);
+        --text: #f1f5f9;
+        --muted: #94a3b8;
+        --border: rgba(45, 212, 191, 0.15);
+        --danger: #ef4444;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --font-mono: 'JetBrains Mono', monospace;
+        --font-sans: 'Inter', sans-serif;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        line-height: 1.5;
+        overflow-x: hidden;
+        background-image: 
+          radial-gradient(circle at 50% 50%, rgba(45, 212, 191, 0.05) 0%, transparent 50%),
+          linear-gradient(rgba(45, 212, 191, 0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(45, 212, 191, 0.02) 1px, transparent 1px);
+        background-size: 100% 100%, 40px 40px, 40px 40px;
+      }
+
+      header {
+        padding: 24px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(11, 15, 26, 0.8);
+        backdrop-filter: blur(8px);
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: var(--font-mono);
+        letter-spacing: -0.02em;
+      }
+
+      .logo h1 {
+        font-size: 20px;
+        margin: 0;
+        font-weight: 700;
+        background: linear-gradient(90deg, var(--accent), #94a3b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 20px;
+        font-size: 13px;
+        font-family: var(--font-mono);
+      }
+
+      .nav-links a {
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .nav-links a:hover { color: var(--accent); }
+
+      main {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+        display: grid;
+        gap: 24px;
+        grid-template-columns: 320px 1fr 320px;
+      }
+
+      @media (max-width: 1100px) {
+        main { grid-template-columns: 1fr; }
+        aside { display: none; }
+      }
+
+      .panel {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        backdrop-filter: blur(12px);
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+
+      h2, h3 {
+        font-family: var(--font-mono);
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--accent);
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      h2::before {
+        content: '';
+        width: 4px;
+        height: 12px;
+        background: var(--accent);
+        display: inline-block;
+      }
+
+      .sidebar { display: flex; flex-direction: column; gap: 24px; }
+
+      .card {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        padding: 12px;
+        font-size: 13px;
+        transition: all 0.2s;
+      }
+
+      .card:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 15px var(--accent-glow);
+      }
+
+      .terminal {
+        background: #05070a;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 16px;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        height: 600px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        position: relative;
+      }
+
+      .terminal::after {
+        content: '';
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+        background-size: 100% 2px, 3px 100%;
+        pointer-events: none;
+        opacity: 0.3;
+      }
+
+      .message {
+        padding-left: 12px;
+        border-left: 2px solid var(--muted);
+      }
+
+      .message.user { border-left-color: var(--accent); }
+      .message.assistant { border-left-color: var(--success); }
+      .message.tool { border-left-color: var(--warning); opacity: 0.8; }
+
+      .message-meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+
+      .composer {
+        display: grid;
+        gap: 12px;
+      }
+
+      textarea {
+        background: #05070a;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        color: var(--text);
+        padding: 12px;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        resize: none;
+        height: 100px;
+        outline: none;
+      }
+
+      textarea:focus { border-color: var(--accent); box-shadow: 0 0 10px var(--accent-glow); }
+
+      .actions { display: flex; gap: 12px; }
+
+      button {
+        background: transparent;
+        border: 1px solid var(--accent);
+        color: var(--accent);
+        padding: 8px 16px;
+        border-radius: 6px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--accent);
+        color: var(--bg);
+        box-shadow: 0 0 15px var(--accent-glow);
+      }
+
+      button.secondary { border-color: var(--muted); color: var(--muted); }
+      button.secondary:hover:not(:disabled) { background: var(--muted); color: var(--bg); }
+
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-family: var(--font-mono);
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid var(--border);
+      }
+
+      .pill { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+      .active .pill, .ready .pill, .success .pill { background: var(--success); box-shadow: 0 0 8px var(--success); animation: pulse 2s infinite; }
+      .paused .pill, .warning .pill { background: var(--warning); }
+      .failed .pill, .error .pill { background: var(--danger); }
+
+      @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.4; }
+        100% { opacity: 1; }
+      }
+
+      .meta-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; font-size: 11px; color: var(--muted); }
+      .meta-grid label { color: var(--accent); font-family: var(--font-mono); text-transform: uppercase; font-size: 10px; margin-bottom: 2px; display: block; }
+
+      input {
+        background: #05070a;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        color: var(--text);
+        padding: 6px 8px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        width: 100%;
+        outline: none;
+      }
+
+      pre {
+        margin: 0;
+        background: #05070a;
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 10px;
+        color: #6ee7b7;
+        overflow-x: auto;
+        border: 1px solid var(--border);
+      }
+
       .hidden { display: none; }
-    </style>
+      .empty { font-style: italic; color: var(--muted); text-align: center; margin-top: 20px; }
+
+      ::-webkit-scrollbar { width: 6px; height: 6px; }
+      ::-webkit-scrollbar-track { background: var(--bg); }
+      ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+      ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+            .terminal-container {
+                flex: 2;
+                font-family: 'JetBrains Mono', monospace;
+                font-size: 0.8rem;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .terminal-box {
+                background: rgba(0, 0, 0, 0.4);
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid var(--border);
+                height: 200px;
+                overflow-y: auto;
+                box-shadow: inset 0 0 10px rgba(0, 255, 157, 0.05);
+            }
+
+            .terminal-line {
+                margin-bottom: 4px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            .timestamp { color: var(--accent); opacity: 0.7; }
+            .attr { color: #88ffcc; font-weight: bold; }
+            .muted { opacity: 0.5; }
+
+            .led.active {
+                background: var(--accent);
+                box-shadow: 0 0 15px var(--accent);
+                animation: pulse 2s infinite ease-in-out;
+            }
+
+            @keyframes pulse {
+                0% { opacity: 0.4; transform: scale(0.9); }
+                50% { opacity: 1; transform: scale(1.1); }
+                100% { opacity: 0.4; transform: scale(0.9); }
+            }
+
+            .quick-actions {
+                display: flex;
+                gap: 15px;
+                margin-top: 20px;
+            }
+
+            .btn {
+                background: var(--accent);
+                color: var(--background);
+                border: none;
+                padding: 10px 20px;
+                font-family: 'Inter', sans-serif;
+                font-weight: 700;
+                border-radius: 4px;
+                cursor: pointer;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                transition: transform 0.2s, box-shadow 0.2s;
+            }
+
+            .btn:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 5px 15px rgba(0, 255, 157, 0.4);
+            }
+
+            .btn.secondary {
+                background: transparent;
+                border: 1px solid var(--accent);
+                color: var(--accent);
+            }
+        </style>
   </head>
   <body>
+    <header>
+      <div class="logo">
+        <h1>AARONCLAW 🧙🏾‍♂️</h1>
+      </div>
+      <nav class="nav-links">
+        <a href="https://docs.aaronclaw.workers.dev" target="_blank">DOCS</a>
+        <a href="https://docs.aaronclaw.workers.dev/roadmap.html" target="_blank">ROADMAP</a>
+        <a href="https://github.com/criticalinsight/aaronclaw" target="_blank">GITHUB</a>
+      </nav>
+    </header>
+
     <main>
-      <section class="card">
-        <h1>${status.service}</h1>
-        <p>A browser-first Cloudflare Worker control surface backed by Durable Objects and AaronDB-style D1 facts.</p>
-        <div class="session-meta">
-          <div>Baseline: <code>${status.baseline}</code></div>
-          <div>Assistant default: <code>${status.assistantRuntime}</code>${status.defaultModel ? ` / <code>${status.defaultModel}</code>` : ""}</div>
-          ${
-            status.activeAssistantRuntime !== status.assistantRuntime || status.activeModel !== status.defaultModel
-              ? `<div>Current active path: <code>${status.activeAssistantRuntime}</code>${status.activeModel ? ` / <code>${status.activeModel}</code>` : ""}</div>`
-              : ""
-          }
-          <div>Auth mode: <code>${status.authMode}</code></div>
-        </div>
-      </section>
-
-      <section class="card grid">
-        <label class="${status.authMode === "none" ? "hidden" : ""}">
-          Deployment token
-          <input id="auth-token" type="password" placeholder="Bearer token for this deployment" autocomplete="current-password" />
-        </label>
-        <label>
-          Session ID
-          <input id="session-id" type="text" placeholder="Create a new session or load an existing one" />
-        </label>
-        <div class="actions">
-          <button id="create-session" type="button">Create session</button>
-          <button id="load-session" type="button" class="secondary">Load session</button>
-          <button id="reload-session" type="button" class="secondary">Reload state</button>
-        </div>
-      </section>
-
-      <section class="card stack">
-        <div class="section-header">
-          <div class="stack">
-            <h2>Operator controls</h2>
-            <p class="muted">Protected hands, skills, and improvement candidates reuse the existing bearer-token surface. Enter the deployment token when auth is enabled, then refresh to inspect evidence, lifecycle history, and bounded operator actions safely.</p>
+      <aside class="sidebar">
+        <section class="panel">
+          <h2>Identity</h2>
+          <div class="meta-grid">
+            <div>
+              <label>Service</label>
+              <code>${status.service}</code>
+            </div>
+            <div>
+              <label>Runtime</label>
+              <code>${status.runtime}</code>
+            </div>
+            <div>
+              <label>Default AI</label>
+              <code>${status.assistantRuntime}</code>
+            </div>
+            <div>
+              <label>Auth</label>
+              <code>${status.authMode}</code>
+            </div>
           </div>
-          <div class="actions">
-            <button id="refresh-operators" type="button" class="secondary">Refresh operator data</button>
+          <p style="font-size: 11px; color: var(--muted); margin: 0;">${status.durableSourceOfTruth}</p>
+        </section>
+
+        <section class="panel">
+          <h2>Terminal Sync</h2>
+          <div class="stack" style="display: grid; gap: 12px;">
+            <label class="${status.authMode === "none" ? "hidden" : ""}">
+              <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">BEARER_TOKEN</span>
+              <input id="auth-token" type="password" placeholder="••••••••" autocomplete="current-password" />
+            </label>
+            <label>
+              <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">SESSION_ID</span>
+              <input id="session-id" type="text" placeholder="UUID or 'latest'" />
+            </label>
+            <div class="actions" style="flex-direction: column;">
+              <button id="create-session" type="button">INIT NEW SESSION</button>
+              <button id="load-session" type="button" class="secondary">MOUNT SESSION</button>
+            </div>
           </div>
-        </div>
-        <div class="operator-grid">
-          <section class="stack">
-            <h3>Hands</h3>
-            <div id="hands" class="stack">
-              <div class="empty">Load operator data to inspect hands.</div>
-            </div>
-          </section>
-          <section class="stack">
-            <h3>Skills</h3>
-            <div id="skills" class="stack">
-              <div class="empty">Load operator data to inspect skills.</div>
-            </div>
-          </section>
-          <section class="stack">
-            <h3>Improvement candidates</h3>
-            <div id="improvements" class="stack">
-              <div class="empty">Load operator data to inspect self-improvement candidates.</div>
-            </div>
-          </section>
-        </div>
-      </section>
+        </section>
 
-      <section class="card">
-        <h2>Conversation</h2>
-        <div id="session-meta" class="session-meta"></div>
-        <div id="messages" class="messages">
-          <div class="empty">Create or load a session to begin chatting.</div>
-        </div>
-      </section>
+        <section class="panel">
+          <h2>Substrate Status</h2>
+          <pre id="status">${JSON.stringify(status, null, 2)}</pre>
+          <button id="reload-session" type="button" class="secondary" style="width: 100%; margin-top: 8px;">REFRESH SIGNAL</button>
+        </section>
+      </aside>
 
-      <section class="card">
-        <form id="composer">
-          <label>
-            Prompt
-            <textarea id="prompt" placeholder="Ask the assistant something..."></textarea>
-          </label>
+      <section class="panel" style="gap: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2>Mission Control</h2>
+          <div id="session-meta" style="font-size: 11px; font-family: var(--font-mono); color: var(--muted);"></div>
+        </div>
+        
+        <div id="messages" class="terminal">
+          <div class="empty">INITIATING CONTROL SURFACE...</div>
+        </div>
+
+        <form id="composer" class="composer">
+          <textarea id="prompt" placeholder="PROMPT > _"></textarea>
           <div class="actions">
-            <button id="send-message" type="submit">Send</button>
+            <button id="send-message" type="submit" style="background: var(--accent); color: var(--bg); font-weight: 700;">TRANSMIT SIGNAL</button>
           </div>
         </form>
       </section>
 
-      <section class="card">
-        <h2>Runtime status</h2>
-        <pre id="status" class="status"></pre>
-      </section>
+      <aside class="sidebar">
+        <section class="panel">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h2>Hands</h2>
+            <button id="refresh-operators" type="button" class="secondary" style="padding: 2px 8px; font-size: 10px;">POLL</button>
+          </div>
+          <div id="hands" class="sidebar-list" style="display: grid; gap: 12px;">
+            <div class="empty">NO HANDS SCANNING</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Skills</h2>
+          <div id="skills" class="sidebar-list" style="display: grid; gap: 12px;">
+            <div class="empty">NO SKILLS MOUNTED</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Improvements</h2>
+          <div id="improvements" class="sidebar-list" style="display: grid; gap: 12px;">
+            <div class="empty">STABLE STATE</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="card terminal-container">
+              <div class="card-header">
+                  <span class="led active" id="pulse-led"></span>
+                  <h3>Tactical Audit Stream</h3>
+              </div>
+              <div id="audit-terminal" class="terminal-box">
+                  <div class="terminal-line muted">Initializing neural link...</div>
+                  <div class="terminal-line muted">Substrate connection: ACTIVE</div>
+              </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Spawn New Agent</h2>
+          <form id="spawn-form" class="stack" style="display: grid; gap: 12px;">
+            <label>
+              <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">AGENT_NAME</span>
+              <input id="spawn-name" type="text" placeholder="my-new-agent" required />
+            </label>
+            <label>
+              <span style="font-size: 11px; color: var(--accent); font-family: var(--font-mono);">AGENT_PROMPT</span>
+              <textarea id="spawn-prompt" placeholder="A simple Cloudflare Worker that..." rows="3"></textarea>
+            </label>
+            <button id="spawn-agent" type="submit" style="background: var(--accent); color: var(--bg); font-weight: 700;">SPAWN AGENT</button>
+          </form>
+        </section>
+      </aside>
     </main>
 
     <script type="module">
@@ -386,6 +765,11 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       const refreshOperatorsButton = document.querySelector("#refresh-operators");
       const sendButton = document.querySelector("#send-message");
       const composer = document.querySelector("#composer");
+      const spawnForm = document.querySelector("#spawn-form");
+      const spawnNameInput = document.querySelector("#spawn-name");
+      const spawnPromptInput = document.querySelector("#spawn-prompt");
+      const spawnAgentButton = document.querySelector("#spawn-agent");
+      
       const state = {
         busy: false,
         hands: [],
@@ -400,7 +784,7 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       }
 
       sessionInput.value = state.sessionId;
-      renderStatus("Ready");
+      renderStatus("System Ready");
       renderOperators();
       renderSession();
 
@@ -412,54 +796,37 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         event.preventDefault();
         run(sendMessage);
       });
+      spawnForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        run(spawnAgent);
+      });
 
       handsElement.addEventListener("click", (event) => {
         const target = event.target;
-        if (!(target instanceof Element)) {
-          return;
-        }
-
+        if (!(target instanceof Element)) return;
         const button = target.closest("button[data-hand-id][data-hand-action]");
-        if (!(button instanceof HTMLButtonElement)) {
-          return;
-        }
-
+        if (!(button instanceof HTMLButtonElement)) return;
         const handId = button.dataset.handId;
         const action = button.dataset.handAction;
-        if (!handId || (action !== "activate" && action !== "pause")) {
-          return;
-        }
-
+        if (!handId || (action !== "activate" && action !== "pause")) return;
         run(() => setHandLifecycle(handId, action));
       });
 
       improvementsElement.addEventListener("click", (event) => {
         const target = event.target;
-        if (!(target instanceof Element)) {
-          return;
-        }
-
+        if (!(target instanceof Element)) return;
         const button = target.closest("button[data-proposal-key][data-improvement-action]");
-        if (!(button instanceof HTMLButtonElement)) {
-          return;
-        }
-
+        if (!(button instanceof HTMLButtonElement)) return;
         const proposalKey = button.dataset.proposalKey;
         const action = button.dataset.improvementAction;
-        if (!proposalKey || (action !== "approve" && action !== "reject" && action !== "pause")) {
-          return;
-        }
-
+        if (!proposalKey || (action !== "approve" && action !== "reject" && action !== "pause")) return;
         run(() => setImprovementLifecycle(proposalKey, action));
       });
 
       void initialize();
 
       async function run(action) {
-        if (state.busy) {
-          return;
-        }
-
+        if (state.busy) return;
         setBusy(true);
         try {
           await action();
@@ -471,12 +838,10 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
       }
 
       async function initialize() {
-        if (state.sessionId) {
-          await run(loadSession);
-        }
-
+        if (state.sessionId) await run(loadSession);
         if (bootstrap.authMode === "none" || (tokenInput && tokenInput.value.trim())) {
           await run(refreshOperatorData);
+          void startTelemetryLoop();
         }
       }
 
@@ -485,65 +850,39 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
         state.session = payload.session;
         setSessionId(payload.sessionId);
         renderSession();
-        renderStatus("Created session " + payload.sessionId);
+        renderStatus("New Interface Created: " + payload.sessionId);
       }
 
       async function loadSession() {
         const sessionId = sessionInput.value.trim();
-        if (!sessionId) {
-          throw new Error("Enter a session ID to load.");
-        }
-
+        if (!sessionId) throw new Error("Enter UUID");
         const payload = await apiFetch("/api/sessions/" + encodeURIComponent(sessionId));
         state.session = payload.session;
         setSessionId(sessionId);
         renderSession();
-        renderStatus("Loaded session " + sessionId);
+        renderStatus("Interface Mounted: " + sessionId);
       }
 
       async function reloadSession() {
-        if (!state.sessionId) {
-          throw new Error("Create or load a session first.");
-        }
-
-        const payload = await apiFetch(
-          "/api/sessions/" + encodeURIComponent(state.sessionId)
-        );
+        if (!state.sessionId) throw new Error("No Active Session");
+        const payload = await apiFetch("/api/sessions/" + encodeURIComponent(state.sessionId));
         state.session = payload.session;
         renderSession();
-        renderStatus("Reloaded persisted state for " + state.sessionId);
+        renderStatus("Signal Refreshed: " + state.sessionId);
       }
 
       async function sendMessage() {
-        if (!state.sessionId) {
-          throw new Error("Create or load a session before sending a prompt.");
-        }
-
+        if (!state.sessionId) throw new Error("Mount Session First");
         const content = promptInput.value.trim();
-        if (!content) {
-          throw new Error("Enter a prompt before sending.");
-        }
-
-        const payload = await apiFetch(
-          "/api/sessions/" + encodeURIComponent(state.sessionId) + "/chat",
-          {
-            method: "POST",
-            body: JSON.stringify({ content })
-          }
-        );
-
+        if (!content) throw new Error("Null Signal");
+        const payload = await apiFetch("/api/sessions/" + encodeURIComponent(state.sessionId) + "/chat", {
+          method: "POST",
+          body: JSON.stringify({ content })
+        });
         state.session = payload.session;
         promptInput.value = "";
         renderSession();
-        const sourceLabel =
-          payload.assistant.source === "workers-ai"
-            ? "Workers AI"
-            : payload.assistant.source === "gemini"
-              ? "Gemini"
-              : "fallback";
-        renderStatus(
-          "Received " + sourceLabel + " response for " + state.sessionId
-        );
+        renderStatus("Signal Received from " + (payload.assistant.source || "remote"));
       }
 
       async function refreshOperatorData() {
@@ -552,59 +891,86 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
           apiFetch("/api/skills"),
           apiFetch("/api/improvements")
         ]);
-
-        state.hands = Array.isArray(handsPayload.hands) ? handsPayload.hands : [];
-        state.improvements = Array.isArray(improvementsPayload.proposals) ? improvementsPayload.proposals : [];
-        state.skills = Array.isArray(skillsPayload.skills) ? skillsPayload.skills : [];
+        state.hands = handsPayload.hands || [];
+        state.improvements = improvementsPayload.proposals || [];
+        state.skills = skillsPayload.skills || [];
         renderOperators();
-        renderStatus(
-          "Refreshed operator data for " +
-            state.hands.length +
-            " hand(s), " +
-            state.skills.length +
-            " skill(s), and " +
-            state.improvements.length +
-            " improvement candidate(s)."
-        );
+        renderStatus("Substrate Polled: " + state.hands.length + "H / " + state.skills.length + "S");
       }
 
       async function setHandLifecycle(handId, action) {
-        await apiFetch("/api/hands/" + encodeURIComponent(handId) + "/" + action, {
-          method: "POST"
-        });
+        await apiFetch("/api/hands/" + encodeURIComponent(handId) + "/" + action, { method: "POST" });
         await refreshOperatorData();
-        renderStatus((action === "activate" ? "Activated " : "Paused ") + handId + " through the protected operator surface.");
+        renderStatus(action.toUpperCase() + ": " + handId);
       }
 
       async function setImprovementLifecycle(proposalKey, action) {
-        await apiFetch("/api/improvements/" + encodeURIComponent(proposalKey) + "/" + action, {
-          method: "POST"
-        });
+        await apiFetch("/api/improvements/" + encodeURIComponent(proposalKey) + "/" + action, { method: "POST" });
         await refreshOperatorData();
-        renderStatus(
-          (action === "approve" ? "Approved " : action === "reject" ? "Rejected " : "Paused ") +
-            proposalKey +
-            " through the protected operator surface."
-        );
+        renderStatus(action.toUpperCase() + ": " + proposalKey);
+      }
+
+      async function spawnAgent() {
+        const name = spawnNameInput.value.trim();
+        const prompt = spawnPromptInput.value.trim();
+        if (!name) throw new Error("Agent name is required.");
+
+        renderStatus("Spawning agent '" + name + "'...", false);
+        try {
+          const payload = await apiFetch("/api/spawn", {
+            method: "POST",
+            body: JSON.stringify({ name, prompt })
+          });
+          renderStatus("Agent '" + name + "' spawned! URL: " + payload.url);
+          spawnNameInput.value = "";
+          spawnPromptInput.value = "";
+        } catch (error) {
+          renderStatus("Failed to spawn agent: " + (error instanceof Error ? error.message : String(error)), true);
+        }
+      }
+
+      async function startTelemetryLoop() {
+        const pulseLed = document.querySelector("#pulse-led");
+        const auditTerminal = document.querySelector("#audit-terminal");
+
+        while (true) {
+          try {
+            const payload = await apiFetch("/api/telemetry");
+            if (payload.facts && payload.facts.length > 0) {
+              if (pulseLed) {
+                pulseLed.style.background = "var(--accent)";
+                setTimeout(() => { pulseLed.style.background = "#333"; }, 200);
+              }
+              
+              if (auditTerminal) {
+                const logs = payload.facts.map(f => {
+                  const date = new Date(f.createdAt || Date.now()).toLocaleTimeString();
+                  return "[" + date + "] " + f.entityId + ": " + f.factType + " -> " + JSON.stringify(f.factValue);
+                }).join("\n");
+                auditTerminal.textContent = logs + "\n---\n" + auditTerminal.textContent;
+                if (auditTerminal.textContent.length > 10000) {
+                  auditTerminal.textContent = auditTerminal.textContent.substring(0, 10000);
+                }
+              }
+            }
+          } catch (e) {
+            console.error("Telemetry loop error:", e);
+          }
+          await new Promise(r => setTimeout(r, 5000));
+        }
       }
 
       async function apiFetch(path, init = {}) {
         const headers = new Headers(init.headers || {});
-        headers.set("content-type", headers.get("content-type") || "application/json");
-
-        if (tokenInput && tokenInput.value.trim()) {
+        headers.set("content-type", "application/json");
+        if (tokenInput?.value.trim()) {
           const token = tokenInput.value.trim();
           headers.set("authorization", "Bearer " + token);
           window.localStorage.setItem(authStorageKey, token);
         }
-
         const response = await fetch(path, { ...init, headers });
         const payload = await response.json().catch(() => ({}));
-
-        if (!response.ok) {
-          throw new Error(payload.error || "Request failed with " + response.status);
-        }
-
+        if (!response.ok) throw new Error(payload.error || "Signal Error " + response.status);
         return payload;
       }
 
@@ -618,55 +984,28 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
 
       function renderSession() {
         const session = state.session;
-
         if (!session) {
-          sessionMetaElement.textContent = "No session loaded yet.";
-          messagesElement.innerHTML = '<div class="empty">Create or load a session to begin chatting.</div>';
+          messagesElement.innerHTML = '<div class="empty">AWAITING CONNECTION...</div>';
           return;
         }
-
-        sessionMetaElement.textContent =
-          "Session " +
-          session.id +
-          " • " +
-          session.events.length +
-          " events • last tx " +
-          session.lastTx +
-          " • last active " +
-          session.lastActiveAt;
-
+        sessionMetaElement.textContent = "ID: " + session.id + " // " + session.events.length + " EVENTS";
         if (!session.events.length) {
-          messagesElement.innerHTML = '<div class="empty">This session exists, but it has no messages yet.</div>';
+          messagesElement.innerHTML = '<div class="empty">VOID SESSION. TRANSMIT SIGNAL TO BEGIN.</div>';
           return;
         }
-
         messagesElement.innerHTML = session.events
           .map((event) => {
             const role = event.kind === "message" ? event.role : "tool";
-            const body =
-              event.kind === "message"
-                ? event.content
-                : event.toolName + ": " + event.summary;
-            const source =
-              event.metadata && typeof event.metadata.source === "string"
-                ? " • " + event.metadata.source
-                : "";
-
-            return [
-              '<article class="message ' + escapeHtml(role) + '">',
-              '  <div class="message-header">',
-              '    <span>' + escapeHtml(role) + escapeHtml(source) + '</span>',
-              '    <span>tx ' +
-                escapeHtml(String(event.tx)) +
-                ' • ' +
-                escapeHtml(event.createdAt) +
-                '</span>',
-              "  </div>",
-              '  <div>' + escapeHtml(body).replace(/\\n/g, "<br />") + '</div>',
-              "</article>"
-            ].join("");
-          })
-          .join("");
+            const body = event.kind === "message" ? event.content : (event.toolName + ": " + (event.summary || "executing"));
+            const source = event.metadata?.source ? " // " + event.metadata.source : "";
+            return \`
+              <article class="message \${role}">
+                <div class="message-meta">\${role.toUpperCase()}\${source.toUpperCase()} // TX \${event.tx} // \${event.createdAt}</div>
+                <div style="white-space: pre-wrap;">\${escapeHtml(body)}</div>
+              </article>
+            \`;
+          }).join("");
+        messagesElement.scrollTop = messagesElement.scrollHeight;
       }
 
       function renderOperators() {
@@ -677,312 +1016,75 @@ export function renderLandingPage(options: BootstrapStatusOptions = {}): string 
 
       function renderHands() {
         if (!state.hands.length) {
-          handsElement.innerHTML =
-            '<div class="empty">' +
-            escapeHtml(
-              bootstrap.authMode === "bearer-token" && (!tokenInput || !tokenInput.value.trim())
-                ? "Enter the deployment token, then refresh operator data to inspect hands."
-                : "No hand data loaded yet. Use refresh operator data to inspect the bundled hands runtime."
-            ) +
-            "</div>";
+          handsElement.innerHTML = '<div class="empty">NO HANDS SCANNING</div>';
           return;
         }
-
-        handsElement.innerHTML = state.hands
-          .map((hand) => {
-            const recentRuns = Array.isArray(hand.recentRuns) ? hand.recentRuns : [];
-            const recentAudit = Array.isArray(hand.recentAudit) ? hand.recentAudit : [];
-            const latestRun = hand.latestRun;
-
-            return [
-              '<article class="operator-card">',
-              '  <div class="section-header">',
-              '    <div class="stack">',
-              '      <strong>' + escapeHtml(hand.label) + '</strong>',
-              '      <span class="muted">' + escapeHtml(hand.description) + '</span>',
-              "    </div>",
-              '    <span class="pill ' + escapeHtml(hand.status) + '">' + escapeHtml(hand.status) + '</span>',
-              "  </div>",
-              '  <ul class="detail-list">',
-              '    <li><strong>ID:</strong> <code>' + escapeHtml(hand.id) + '</code></li>',
-              '    <li><strong>Runtime:</strong> <code>' + escapeHtml(hand.runtime) + '</code></li>',
-              '    <li><strong>Schedules:</strong> ' + escapeHtml((hand.scheduleCrons || []).join(", ") || "none") + '</li>',
-              '    <li><strong>Last lifecycle:</strong> ' + escapeHtml(hand.lastLifecycleAction || "none") + '</li>',
-              '    <li><strong>Updated:</strong> ' + escapeHtml(hand.updatedAt || "never") + '</li>',
-              '    <li><strong>Latest run:</strong> ' + escapeHtml(latestRun ? latestRun.status + (latestRun.cron ? " via " + latestRun.cron : "") : "no runs yet") + '</li>',
-              "  </ul>",
-              '  <div class="actions">',
-              '    <button type="button" data-hand-id="' + escapeHtml(hand.id) + '" data-hand-action="activate"' + (hand.status === "active" ? " disabled" : "") + '>Activate</button>',
-              '    <button type="button" class="secondary" data-hand-id="' + escapeHtml(hand.id) + '" data-hand-action="pause"' + (hand.status === "paused" ? " disabled" : "") + '>Pause</button>',
-              "  </div>",
-              renderHandRuns(recentRuns),
-              renderHandAudit(recentAudit),
-              "</article>"
-            ].join("");
-          })
-          .join("");
-      }
-
-      function renderHandRuns(recentRuns) {
-        return [
-          '<details>',
-          '  <summary>Recent status</summary>',
-          recentRuns.length
-            ? '  <ul class="list">' +
-                recentRuns
-                  .map((run) =>
-                    '<li><span class="pill ' +
-                    escapeHtml(run.status) +
-                    '">' +
-                    escapeHtml(run.status) +
-                    '</span> ' +
-                    escapeHtml(run.summary) +
-                    (run.maintenanceSessionId
-                      ? ' <span class="muted">(' + escapeHtml(run.maintenanceSessionId) + ")</span>"
-                      : "") +
-                    '</li>'
-                  )
-                  .join("") +
-                "</ul>"
-            : '  <div class="empty">No hand runs recorded yet.</div>',
-          "</details>"
-        ].join("");
-      }
-
-      function renderHandAudit(recentAudit) {
-        return [
-          '<details>',
-          '  <summary>Recent audit</summary>',
-          recentAudit.length
-            ? '  <ul class="list">' +
-                recentAudit
-                  .map((audit) =>
-                    '<li><span class="pill ' +
-                    escapeHtml(audit.outcome || "") +
-                    '">' +
-                    escapeHtml(audit.outcome || "unknown") +
-                    '</span> ' +
-                    escapeHtml(audit.toolName) +
-                    (audit.capability ? ' <code>' + escapeHtml(audit.capability) + '</code>' : "") +
-                    (audit.detail ? ' <span class="muted">' + escapeHtml(audit.detail) + '</span>' : "") +
-                    '</li>'
-                  )
-                  .join("") +
-                "</ul>"
-            : '  <div class="empty">No hand audit records recorded yet.</div>',
-          "</details>"
-        ].join("");
+        handsElement.innerHTML = state.hands.map(hand => \`
+          <article class="card active">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong style="color: var(--accent);">\${escapeHtml(hand.label)}</strong>
+              <div class="status-pill \${hand.status}"><div class="pill"></div>\${hand.status.toUpperCase()}</div>
+            </div>
+            <div style="font-size: 11px; opacity: 0.7; font-family: var(--font-mono);">\${escapeHtml(hand.id)}</div>
+            <div class="actions" style="margin-top: 10px;">
+              <button class="secondary" style="font-size: 9px; padding: 2px 6px;" data-hand-id="\${hand.id}" data-hand-action="activate" \${hand.status === 'active' ? 'disabled' : ''}>ACTIVATE</button>
+              <button class="secondary" style="font-size: 9px; padding: 2px 6px;" data-hand-id="\${hand.id}" data-hand-action="pause" \${hand.status === 'paused' ? 'disabled' : ''}>PAUSE</button>
+            </div>
+          </article>
+        \`).join("");
       }
 
       function renderImprovements() {
         if (!state.improvements.length) {
-          improvementsElement.innerHTML =
-            '<div class="empty">' +
-            escapeHtml(
-              bootstrap.authMode === "bearer-token" && (!tokenInput || !tokenInput.value.trim())
-                ? "Enter the deployment token, then refresh operator data to inspect improvement candidates."
-                : "No structured improvement candidates have been recorded yet. Run the Improvement Hand and refresh operator data after it completes."
-            ) +
-            "</div>";
+          improvementsElement.innerHTML = '<div class="empty">STABLE STATE</div>';
           return;
         }
-
-        improvementsElement.innerHTML = state.improvements
-          .map((proposal) => {
-            const evidence = Array.isArray(proposal.evidence) ? proposal.evidence : [];
-            const lifecycleHistory = Array.isArray(proposal.lifecycleHistory) ? proposal.lifecycleHistory : [];
-            const canApprove = proposal.status === "awaiting-approval" || proposal.status === "paused";
-            const canPause = proposal.status === "awaiting-approval";
-            const canReject =
-              proposal.status !== "rejected" && proposal.status !== "promoted" && proposal.status !== "rolled-back";
-
-            return [
-              '<article class="operator-card">',
-              '  <div class="section-header">',
-              '    <div class="stack">',
-              '      <strong>' + escapeHtml(proposal.summary) + '</strong>',
-              '      <span class="muted">' + escapeHtml(proposal.proposedAction) + '</span>',
-              "    </div>",
-              '    <span class="pill ' + escapeHtml(proposal.status) + '">' + escapeHtml(proposal.status) + '</span>',
-              "  </div>",
-              '  <ul class="detail-list">',
-              '    <li><strong>Proposal key:</strong> <code>' + escapeHtml(proposal.proposalKey) + '</code></li>',
-              '    <li><strong>Candidate key:</strong> <code>' + escapeHtml(proposal.candidateKey) + '</code></li>',
-              '    <li><strong>Source session:</strong> <code>' + escapeHtml(proposal.sourceSessionId) + '</code></li>',
-              '    <li><strong>Risk:</strong> ' + escapeHtml(proposal.riskLevel) + '</li>',
-              '    <li><strong>Shadow:</strong> ' + escapeHtml(proposal.shadowEvaluation?.status || "pending") + '</li>',
-              '    <li><strong>Approval:</strong> ' + escapeHtml(proposal.approval?.status || "pending") + '</li>',
-              '    <li><strong>Signals:</strong> ' + escapeHtml((proposal.derivedFromSignalKeys || []).join(", ") || "none") + '</li>',
-              "  </ul>",
-              '  <div class="actions">',
-              '    <button type="button" data-proposal-key="' +
-                escapeHtml(proposal.proposalKey) +
-                '" data-improvement-action="approve"' +
-                (canApprove ? "" : " disabled") +
-                '>Approve</button>',
-              '    <button type="button" class="secondary" data-proposal-key="' +
-                escapeHtml(proposal.proposalKey) +
-                '" data-improvement-action="pause"' +
-                (canPause ? "" : " disabled") +
-                '>Pause</button>',
-              '    <button type="button" class="secondary" data-proposal-key="' +
-                escapeHtml(proposal.proposalKey) +
-                '" data-improvement-action="reject"' +
-                (canReject ? "" : " disabled") +
-                '>Reject</button>',
-              "  </div>",
-              '<details>',
-              '  <summary>Evidence summary</summary>',
-              evidence.length
-                ? '  <ul class="list">' +
-                    evidence
-                      .map((entry) => '<li>' + escapeHtml(entry.summary || "") + '</li>')
-                      .join("") +
-                    '</ul>'
-                : '  <div class="empty">No evidence summary was stored for this candidate.</div>',
-              '</details>',
-              '<details>',
-              '  <summary>Lifecycle history</summary>',
-              lifecycleHistory.length
-                ? '  <ul class="list">' +
-                    lifecycleHistory
-                      .slice()
-                      .reverse()
-                      .map((entry) =>
-                        '<li><span class="pill ' +
-                        escapeHtml(entry.toStatus || "") +
-                        '">' +
-                        escapeHtml(entry.toStatus || "unknown") +
-                        '</span> ' +
-                        escapeHtml(entry.summary || "") +
-                        (entry.timestamp ? ' <span class="muted">' + escapeHtml(entry.timestamp) + '</span>' : '') +
-                        '</li>'
-                      )
-                      .join("") +
-                    '</ul>'
-                : '  <div class="empty">No lifecycle history is recorded yet.</div>',
-              '</details>',
-              '</article>'
-            ].join("");
-          })
-          .join("");
+        improvementsElement.innerHTML = state.improvements.map(prop => \`
+          <article class="card activity">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+              <strong style="color: #ffcc88;">\${escapeHtml(prop.attribute)}</strong>
+              <div class="status-pill \${prop.status}"><div class="pill"></div>\${prop.status.toUpperCase()}</div>
+            </div>
+            <div style="font-size: 11px; opacity: 0.7; font-family: var(--font-mono);">\${escapeHtml(prop.entity)}</div>
+            <div class="actions" style="margin-top: 10px;">
+              <button class="secondary" style="font-size: 9px; padding: 2px 6px;" data-improvement-key="\${prop.entity}:\${prop.attribute}" data-improvement-action="apply" \${prop.status === 'applied' ? 'disabled' : ''}>APPLY</button>
+              <button class="secondary" style="font-size: 9px; padding: 2px 6px;" data-improvement-key="\${prop.entity}:\${prop.attribute}" data-improvement-action="discard" \${prop.status === 'discarded' ? 'disabled' : ''}>DISCARD</button>
+            </div>
+          </article>
+        \`).join("");
       }
 
       function renderSkills() {
         if (!state.skills.length) {
-          skillsElement.innerHTML =
-            '<div class="empty">' +
-            escapeHtml(
-              bootstrap.authMode === "bearer-token" && (!tokenInput || !tokenInput.value.trim())
-                ? "Enter the deployment token, then refresh operator data to inspect skills."
-                : "No skill data loaded yet. Use refresh operator data to inspect the manifest-driven skill set."
-            ) +
-            "</div>";
+          skillsElement.innerHTML = '<div class="empty">NO SKILLS MOUNTED</div>';
           return;
         }
-
-        skillsElement.innerHTML = state.skills
-          .map((skill) => {
-            const declaredToolDetails = Array.isArray(skill.declaredToolDetails)
-              ? skill.declaredToolDetails
-              : [];
-            const requiredSecrets = Array.isArray(skill.requiredSecrets) ? skill.requiredSecrets : [];
-
-            return [
-              '<article class="operator-card">',
-              '  <div class="section-header">',
-              '    <div class="stack">',
-              '      <strong>' + escapeHtml(skill.label) + '</strong>',
-              '      <span class="muted">' + escapeHtml(skill.description) + '</span>',
-              "    </div>",
-              '    <span class="pill ' + escapeHtml(skill.readiness) + '">' + escapeHtml(skill.readiness) + '</span>',
-              "  </div>",
-              '  <ul class="detail-list">',
-              '    <li><strong>ID:</strong> <code>' + escapeHtml(skill.id) + '</code></li>',
-              '    <li><strong>Memory scope:</strong> ' + escapeHtml(skill.memoryScope) + '</li>',
-              '    <li><strong>Runtime:</strong> <code>' + escapeHtml(skill.runtime) + '</code></li>',
-              '    <li><strong>Install scope:</strong> <code>' + escapeHtml(skill.installScope) + '</code></li>',
-              "  </ul>",
-              '<details>',
-              '  <summary>Declared tools and capability policy</summary>',
-              declaredToolDetails.length
-                ? '  <ul class="list">' +
-                    declaredToolDetails
-                      .map((tool) =>
-                        '<li><strong>' +
-                        escapeHtml(tool.id) +
-                        '</strong> <code>' +
-                        escapeHtml(tool.capability) +
-                        '</code> <span class="muted">' +
-                        escapeHtml(tool.policy) +
-                        '</span></li>'
-                      )
-                      .join("") +
-                    "</ul>"
-                : '  <div class="empty">No declared tools.</div>',
-              '</details>',
-              '<details>',
-              '  <summary>Required secrets</summary>',
-              requiredSecrets.length
-                ? '  <ul class="list">' +
-                    requiredSecrets
-                      .map((secret) =>
-                        '<li><span class="pill ' +
-                        escapeHtml(secret.configured ? "ready" : "missing-secrets") +
-                        '">' +
-                        escapeHtml(secret.configured ? "configured" : "missing") +
-                        '</span> ' +
-                        escapeHtml(secret.id) +
-                        (secret.validationStatus
-                          ? ' <span class="muted">' + escapeHtml(secret.validationStatus) + '</span>'
-                          : "") +
-                        '</li>'
-                      )
-                      .join("") +
-                    "</ul>"
-                : '  <div class="empty">This skill does not require extra secrets.</div>',
-              '</details>',
-              "</article>"
-            ].join("");
-          })
-          .join("");
+        skillsElement.innerHTML = state.skills.map(skill => \`
+          <article class="card">
+            <div style="color: var(--accent); font-weight: bold; margin-bottom: 4px;">\${escapeHtml(skill.id)}</div>
+            <div style="font-size: 0.75rem; opacity: 0.8; line-height: 1.4;">\${escapeHtml(skill.description)}</div>
+          </article>
+        \`).join("");
       }
 
       function renderStatus(message, isError = false) {
-        statusElement.textContent = JSON.stringify(
-          {
-            level: isError ? "error" : "info",
-            message,
-            sessionId: state.sessionId || null,
-            handCount: state.hands.length,
-            improvementCount: state.improvements.length,
-            skillCount: state.skills.length,
-            authMode: bootstrap.authMode,
-            assistantRuntime: bootstrap.assistantRuntime,
-            defaultModel: bootstrap.defaultModel,
-            activeAssistantRuntime: bootstrap.activeAssistantRuntime,
-            activeModel: bootstrap.activeModel,
-            selectionFallbackReason: bootstrap.selectionFallbackReason
-          },
-          null,
-          2
-        );
+        statusElement.textContent = JSON.stringify({
+          level: isError ? "ERROR" : "SIGNAL",
+          message,
+          timestamp: new Date().toISOString(),
+          activeModel: bootstrap.activeModel
+        }, null, 2);
       }
 
       function setBusy(busy) {
         state.busy = busy;
-        [createButton, loadButton, reloadButton, refreshOperatorsButton, sendButton].forEach((button) => {
-          button.disabled = busy;
+        [createButton, loadButton, reloadButton, refreshOperatorsButton, sendButton].forEach(b => { 
+          if(b) b.disabled = busy; 
         });
       }
 
-      function escapeHtml(value) {
-        return String(value)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#39;");
+      function escapeHtml(v) {
+        return String(v).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
       }
     </script>
   </body>

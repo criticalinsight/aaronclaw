@@ -6,13 +6,27 @@ import {
   type ToolEvent
 } from "./session-state";
 import { readProviderKeyStatus, readProviderKeyFromEnv } from "./provider-key-store";
-import { createPullRequest, pushFilesToGithub } from "./github-coordinator";
+import {
+  readPersistedModelSelection,
+  setPersistedModelSelection
+} from "./model-selection-store";
+import { createPullRequest, pushFilesToGithub, getLatestWorkflowRun } from "./github-coordinator";
+import { KnowledgeHub } from "./knowledge-hub";
+import type { SophiaHandProposal } from "./sophia-engine";
 import { buildToolAuditRecord } from "./tool-policy";
+import { queryKnowledgeVault } from "./knowledge-vault";
 
 const ALL_FACTS_SQL = `
   SELECT session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation
   FROM aarondb_facts
   WHERE session_id != ?
+  ORDER BY session_id ASC, tx ASC, tx_index ASC
+`;
+
+const ALL_FACTS_AS_OF_SQL = `
+  SELECT session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation
+  FROM aarondb_facts
+  WHERE session_id != ? AND occurred_at_dt <= ?
   ORDER BY session_id ASC, tx ASC, tx_index ASC
 `;
 
@@ -58,7 +72,16 @@ export type ImprovementCandidateStatus =
 type ImprovementShadowStatus = "pending" | "completed";
 type ImprovementShadowVerdict = "pending" | "awaiting-approval";
 type ImprovementApprovalStatus = "pending" | "approved" | "rejected";
-type ImprovementPromotionStatus = "not-promoted" | "promoted" | "rolled-back";
+export type ImprovementPromotionStatus = "not-promoted" | "promoted" | "rolled-back";
+
+export interface DomainDeclarationRecord extends JsonObject {
+  domain: string;
+  version: number;
+  declaration: any; // DomainDeclaration from aether-engine
+  synthesizedAt: string;
+  tx: number;
+}
+
 export type ImprovementLifecycleAction =
   | "propose"
   | "start-shadow"
@@ -67,6 +90,7 @@ export type ImprovementLifecycleAction =
   | "approve"
   | "promote"
   | "reject"
+  | "nexus-vote"
   | "rollback";
 
 export interface ImprovementEvidenceRecord extends JsonObject {
@@ -108,6 +132,14 @@ interface ImprovementApprovalRecord extends JsonObject {
   approvedAt: string | null;
   rejectedAt: string | null;
   summary: string;
+}
+
+export interface NexusVoteRecord extends JsonObject {
+  voterNodeId: string;
+  voterLabel: string;
+  vote: "approve" | "reject";
+  timestamp: string;
+  weight: number;
 }
 
 interface ImprovementPromotionRecord extends JsonObject {
@@ -154,6 +186,8 @@ export interface ImprovementCandidateRecord extends JsonObject {
   shadowEvaluation: ImprovementShadowEvaluationRecord;
   approval: ImprovementApprovalRecord;
   promotion: ImprovementPromotionRecord;
+  votes: NexusVoteRecord[];
+  complectionScore: number;
   lifecycleHistory: ImprovementLifecycleEntryRecord[];
 }
 
@@ -172,6 +206,19 @@ export interface SessionReflectionResult {
   sourceLastTx: number;
   improvementSignalCount: number;
   improvementCandidateCount: number;
+  successEvidenceCount: number;
+}
+
+export interface SuccessEvidenceRecord extends JsonObject {
+  kind: "success-orbit";
+  sessionId: string;
+  timestamp: string;
+  summary: string;
+  trajectory: {
+    intent: string;
+    outcome: string;
+    steps: number;
+  };
 }
 
 export interface ScheduledMaintenanceResult {
@@ -199,6 +246,39 @@ export interface UserCorrectionMiningResult {
   matchedCorrectionCount: number;
   generatedProposalCount: number;
   skippedDuplicateProposalCount: number;
+}
+
+export interface ReflexiveAuditResult {
+  cron: string;
+  auditSessionId: string;
+  proposalSessionId: string;
+  reviewedFactCount: number;
+  latencyAnomalies: number;
+  errorClusters: number;
+  generatedProposalCount: number;
+}
+
+export async function resolveFactsAsOf(env: any, timestamp: string, excludeSessionId: string = IMPROVEMENT_PROPOSAL_SESSION_ID): Promise<Map<string, Map<string, any>>> {
+  const db = env.AARONDB || env.DB;
+  if (!db) throw new Error("AARONDB binding not found");
+
+  const facts = await db.prepare(ALL_FACTS_AS_OF_SQL).bind(excludeSessionId, timestamp).all();
+  const state = new Map<string, Map<string, any>>();
+
+  for (const row of facts.results as any[]) {
+    if (!state.has(row.entity)) {
+      state.set(row.entity, new Map<string, any>());
+    }
+    const entityState = state.get(row.entity)!;
+    
+    if (row.operation === 'retract') {
+      entityState.delete(row.attribute);
+    } else {
+      entityState.set(row.attribute, JSON.parse(row.value_json));
+    }
+  }
+
+  return state;
 }
 
 type UserCorrectionPatternKey =
@@ -314,7 +394,8 @@ export async function reflectSession(input: {
       persisted: false,
       sourceLastTx: 0,
       improvementSignalCount: 0,
-      improvementCandidateCount: 0
+      improvementCandidateCount: 0,
+      successEvidenceCount: 0
     };
   }
 
@@ -333,13 +414,15 @@ export async function reflectSession(input: {
       persisted: false,
       sourceLastTx: sourceSession.lastTx,
       improvementSignalCount: 0,
-      improvementCandidateCount: 0
+      improvementCandidateCount: 0,
+      successEvidenceCount: 0
     };
   }
 
   const metrics = analyzeSession(sourceSession);
   const improvementSignals = buildImprovementSignals(sourceSession, metrics);
   const improvementCandidates = buildImprovementCandidates(improvementSignals, timestamp);
+  const successEvidence = buildSuccessEvidence(sourceSession, metrics, timestamp);
   const summary = buildReflectionSummary(sourceSession, metrics);
 
   await reflectionRepository.appendToolEvent({
@@ -356,8 +439,10 @@ export async function reflectSession(input: {
       unresolvedPromptCount: metrics.unresolvedPromptCount,
       improvementSignalCount: improvementSignals.length,
       improvementCandidateCount: improvementCandidates.length,
+      successEvidenceCount: successEvidence.length,
       improvementSignals,
       improvementCandidates,
+      successEvidence,
       audit: buildToolAuditRecord({
         toolId: "session-reflection",
         actor: "maintenance-runtime",
@@ -382,8 +467,43 @@ export async function reflectSession(input: {
     persisted: true,
     sourceLastTx: sourceSession.lastTx,
     improvementSignalCount: improvementSignals.length,
-    improvementCandidateCount: improvementCandidates.length
+    improvementCandidateCount: improvementCandidates.length,
+    successEvidenceCount: successEvidence.length
   };
+}
+
+function buildSuccessEvidence(
+  session: SessionRecord,
+  metrics: ReturnType<typeof analyzeSession>,
+  timestamp: string
+): SuccessEvidenceRecord[] {
+  // 🧙🏾‍♂️ Success is a signal for structural synthesis.
+  // Criteria: Good reasoning signals, tool traces present, and zero degraded audits.
+  const evidence: SuccessEvidenceRecord[] = [];
+  
+  const hasSuccessfulOrbit = 
+    metrics.proofSignalCount >= 2 && 
+    metrics.toolEventCount >= 1 && 
+    metrics.unresolvedPromptCount === 0;
+
+  if (hasSuccessfulOrbit) {
+    const latestUser = [...session.messages].reverse().find(m => m.role === "user")?.content || "unknown";
+    const latestAssistant = [...session.messages].reverse().find(m => m.role === "assistant")?.content || "No resolution recorded.";
+
+    evidence.push({
+      kind: "success-orbit",
+      sessionId: session.id,
+      timestamp,
+      summary: `Successful end-to-end orbit detected: ${trimText(latestUser, 60)} -> RESOLVED.`,
+      trajectory: {
+        intent: latestUser,
+        outcome: latestAssistant,
+        steps: session.events.length
+      }
+    });
+  }
+
+  return evidence;
 }
 
 export async function runScheduledMaintenance(input: {
@@ -603,8 +723,149 @@ export async function runScheduledUserCorrectionMining(input: {
   };
 }
 
+export async function runAutonomousEvolution(input: {
+  env: any;
+  cron: string;
+  timestamp?: string;
+}): Promise<{
+  cron: string;
+  handSessionId: string;
+  generatedHandCount: number;
+  promotedCount: number;
+  distilledCount: number;
+  proposals: SophiaHandProposal[];
+}> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const reflectionArtifacts = await listRecentStoredReflectionArtifacts(input.env.AARONDB, MAX_MAINTENANCE_SESSIONS);
+  
+  const allEvidence = reflectionArtifacts.flatMap(a => a.successEvidence || []);
+
+  const { distillEvidence } = await import("./sophia-engine");
+  const proposals = await distillEvidence(input.env, allEvidence);
+
+  const promotedCount = proposals.filter((p) => p.status === "promoted").length;
+  const distilledCount = proposals.length - promotedCount;
+
+  const handSessionId = `${HAND_PREFIX}synthesized`;
+  const handRepository = new AaronDbEdgeSessionRepository(input.env.AARONDB, handSessionId);
+
+  if (proposals.length > 0) {
+    await ensureSyntheticSession(handRepository, timestamp);
+    await handRepository.appendToolEvent({
+      timestamp,
+      toolName: "structural-hand-synthesis",
+      summary: `Sophia Distiller generated ${proposals.length} structural hand proposal(s) from success evidence. Promoted: ${promotedCount}, Distilled: ${distilledCount}.`,
+      metadata: {
+        cron: input.cron,
+        proposals,
+        audit: buildToolAuditRecord({
+          toolId: "structural-hand-synthesis",
+          actor: "hand-runtime",
+          scope: "hand",
+          outcome: "succeeded",
+          timestamp,
+          handId: "sophia-distiller",
+          sessionId: handSessionId,
+          detail: `Sophia Distiller generated ${proposals.length} structural hand proposal(s). (${promotedCount} promoted)`,
+          extra: { proposals: proposals.length, promotedCount, distilledCount }
+        })
+      }
+    });
+
+    if (promotedCount > 0) {
+      // 🧙🏾‍♂️ Write the promoted proposals into the improvement candidate store 
+      // so the factory's standard review mechanisms (or automated Nexus voting) can pick them up.
+      const proposalRepository = new AaronDbEdgeSessionRepository(
+        input.env.AARONDB,
+        IMPROVEMENT_PROPOSAL_SESSION_ID
+      );
+      await ensureSyntheticSession(proposalRepository, timestamp);
+      await proposalRepository.appendToolEvent({
+        timestamp,
+        toolName: "improvement-proposal-review",
+        summary: `Sophia automatically promoted ${promotedCount} new hand candidate(s) to the improvement pipeline.`,
+        metadata: {
+          cron: input.cron,
+          generatedProposalCount: promotedCount,
+          proposals: proposals.filter(p => p.status === "promoted").map(p => ({
+            candidateKey: p.handId,
+            status: "proposed",
+            summary: p.description,
+            problemStatement: "Synthesized automatically from successful orbit trajectory.",
+            proposedAction: `Implement new structural hand: ${p.name}`,
+            expectedBenefit: p.intentPattern,
+            riskLevel: "low",
+            verificationPlan: "Verify new Hand correctly intercepts mapped intent.",
+            derivedFromSignalKeys: ["sophia-distillation"],
+            evidence: [],
+            risk: { level: "low", summary: "Synthesized from observed verified success." },
+            verification: { status: "pending", summary: "Awaiting shadow or live traffic verification." },
+            shadowEvaluation: {
+              mode: "bounded-metadata-shadow",
+              status: "pending",
+              verdict: "pending",
+              baselineSummary: "",
+              candidateSummary: "",
+              comparisonSummary: "",
+              baselineEvidenceCount: 0,
+              baselineRiskLevel: "low",
+              baselineVerificationStatus: "pending",
+              candidateRiskLevel: "low",
+              startedAt: timestamp,
+              completedAt: null
+            },
+            approval: {
+              requiresProtectedApproval: true,
+              status: "pending",
+              approvedAt: null,
+              rejectedAt: null,
+              summary: "Awaiting structural review."
+            },
+            promotion: {
+              status: "not-promoted",
+              promotedAt: null,
+              rolledBackAt: null,
+              productionMutation: "manual-only",
+              liveMutationApplied: false,
+              summary: "Awaiting final promotion to substrate."
+            },
+            votes: [],
+            complectionScore: 0,
+            lifecycleHistory: [
+              {
+                action: "propose",
+                fromStatus: "none",
+                toStatus: "proposed",
+                actor: "hand-runtime",
+                timestamp,
+                summary: "Synthesized explicitly by Sophia."
+              }
+            ],
+            proposalKey: `sophia:${timestamp}:${p.handId}`,
+            sourceReflectionSessionId: "synthetic-sophia",
+            sourceSessionId: "synthetic-sophia",
+            sourceLastTx: 0
+          })),
+          reviewedReflectionCount: reflectionArtifacts.length,
+          reviewedSignalCount: allEvidence.length,
+          skippedDuplicateProposalCount: 0
+        }
+      });
+    }
+  }
+
+  return {
+    cron: input.cron,
+    handSessionId,
+    generatedHandCount: proposals.length,
+    promotedCount,
+    distilledCount,
+    proposals
+  };
+}
+
 export async function runScheduledImprovementShadowEvaluation(input: {
-  env: Pick<Env, "AARONDB">;
+  env: Pick<Env, "AARONDB" | "DB">;
   cron: string;
   timestamp?: string;
 }): Promise<ImprovementShadowEvaluationResult> {
@@ -685,10 +946,11 @@ export async function readImprovementProposalState(input: {
 }
 
 export async function recordImprovementLifecycleAction(input: {
-  env: Pick<Env, "AARONDB" | "GITHUB_TOKEN" | "CLOUDFLARE_ACCOUNT_ID">;
+  env: Pick<Env, "AARONDB" | "DB" | "GITHUB_TOKEN" | "CLOUDFLARE_ACCOUNT_ID">;
   proposalKey: string;
-  action: Extract<ImprovementLifecycleAction, "pause" | "approve" | "promote" | "reject" | "rollback">;
+  action: ImprovementLifecycleAction;
   timestamp?: string;
+  extra?: JsonObject;
 }): Promise<ImprovementProposalRecord> {
   const timestamp = input.timestamp ?? new Date().toISOString();
   const proposalRepository = new AaronDbEdgeSessionRepository(
@@ -702,7 +964,7 @@ export async function recordImprovementLifecycleAction(input: {
     throw new Error(`Improvement proposal ${input.proposalKey} was not found.`);
   }
 
-  const updatedProposal = applyLifecycleAction(currentProposal, input.action, timestamp);
+  const updatedProposal = applyLifecycleAction(currentProposal, input.action, timestamp, input.extra);
   
   // 🧙🏾‍♂️ Rich Hickey: Side effects should be explicit and bounded.
   // When an improvement is approved, we draft a PR if GitHub is configured.
@@ -735,9 +997,51 @@ export async function recordImprovementLifecycleAction(input: {
     }
   }
 
+  // Phase 4: Knowledge Hub - Contribute promoted patterns to global knowledge
+  if (input.action === "promote") {
+    try {
+      const dbs: D1Database[] = [input.env.AARONDB];
+      if (input.env.DB) dbs.push(input.env.DB);
+      const hub = new KnowledgeHub(dbs);
+      await hub.contributePattern({
+        patternKey: updatedProposal.candidateKey as string,
+        category: updatedProposal.category as string,
+        problemStatement: updatedProposal.problemStatement as string,
+        proposedAction: updatedProposal.proposedAction as string,
+        expectedBenefit: updatedProposal.expectedBenefit as string
+      });
+    } catch (error) {
+      console.error("Failed to contribute pattern to Knowledge Hub", error);
+    }
+  }
+
+  if (input.action === "nexus-vote") {
+    const voteData = input.extra?.vote as NexusVoteRecord;
+    if (voteData) {
+      const votes = updatedProposal.votes || [];
+      const existingVoteIndex = votes.findIndex(v => v.voterNodeId === voteData.voterNodeId);
+      if (existingVoteIndex >= 0) {
+        votes[existingVoteIndex] = voteData;
+      } else {
+        votes.push(voteData);
+      }
+      updatedProposal.votes = votes;
+
+      // Auto-promotion logic: if > 50% weight approves, auto-promote if pending approval
+      const totalWeight = votes.reduce((acc, v) => acc + v.weight, 0);
+      const approveWeight = votes.filter(v => v.vote === "approve").reduce((acc, v) => acc + v.weight, 0);
+
+      if (approveWeight > totalWeight / 2 && updatedProposal.status === "awaiting-approval") {
+        updatedProposal.status = "approved";
+        updatedProposal.approval.status = "approved";
+        updatedProposal.approval.approvedAt = timestamp;
+        updatedProposal.approval.summary = `Nexus consensus reached: ${approveWeight}/${totalWeight} weight approved.`;
+      }
+    }
+  }
+
   await ensureSyntheticSession(proposalRepository, timestamp);
-  const summary =
-    updatedProposal.lifecycleHistory[updatedProposal.lifecycleHistory.length - 1]?.summary ??
+  const summary: string = (updatedProposal.lifecycleHistory[updatedProposal.lifecycleHistory.length - 1]?.summary as string) ??
     `Improvement lifecycle ${input.action} recorded for ${currentProposal.proposalKey}.`;
 
   await proposalRepository.appendToolEvent({
@@ -768,11 +1072,192 @@ export async function recordImprovementLifecycleAction(input: {
   return updatedProposal;
 }
 
+export async function runReflexiveAudit(input: {
+  env: Pick<Env, "AARONDB" | "DB">;
+  cron: string;
+  timestamp?: string;
+}): Promise<ReflexiveAuditResult> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const auditSessionId = `${MAINTENANCE_PREFIX}reflexive-audit:${timestamp.slice(0, 10)}`;
+  const auditRepository = new AaronDbEdgeSessionRepository(input.env.AARONDB, auditSessionId);
+  await ensureSyntheticSession(auditRepository, timestamp);
+
+  // 🧙🏾‍♂️ Rich Hickey: Observation is the first step to de-complecting state.
+  // We query for recent tool performance and failure modes.
+  const auditFacts = await input.env.AARONDB.prepare(`
+    SELECT value_json, occurred_at FROM aarondb_facts
+    WHERE entity = 'tool_audit' OR entity = 'tool_event'
+    ORDER BY occurred_at DESC LIMIT 500
+  `).all<{ value_json: string; occurred_at: string }>();
+
+  const toolStats = new Map<string, { latencies: number[]; errors: number; total: number }>();
+  for (const row of auditFacts.results ?? []) {
+    try {
+      const data = JSON.parse(row.value_json) as any;
+      const toolId = data.toolId || data.toolName;
+      if (!toolId) continue;
+
+      const stats = toolStats.get(toolId) ?? { latencies: [], errors: 0, total: 0 };
+      stats.total += 1;
+      if (data.durationMs) stats.latencies.push(data.durationMs);
+      if (data.outcome === "failed" || data.status === "failed") stats.errors += 1;
+      toolStats.set(toolId, stats);
+    } catch {}
+  }
+
+  const signals: ImprovementSignalRecord[] = [];
+  let latencyAnomalies = 0;
+  let errorClusters = 0;
+
+  for (const [toolId, stats] of toolStats.entries()) {
+    // 1. Latency Anomaly Detection
+    if (stats.latencies.length >= 3) {
+      const avg = stats.latencies.reduce((a, b) => a + b, 0) / stats.latencies.length;
+      const recent = stats.latencies[0];
+      if (recent > avg * 2 && recent > 500) {
+        latencyAnomalies += 1;
+        signals.push({
+          signalKey: `latency-anomaly-${toolId}`,
+          category: "verification",
+          status: "active",
+          summary: `Tool ${toolId} showed a latency spike (recent=${recent}ms vs avg=${Math.round(avg)}ms).`,
+          evidence: [buildMetricEvidence(`toolId=${toolId}; recent=${recent}ms; avg=${Math.round(avg)}ms`)],
+          risk: { level: "medium", summary: "Degrading tool performance affects overall UX and costs." },
+          verification: { status: "pending", summary: "Monitor later runs for stabilization or further degradation." }
+        });
+      }
+    }
+
+    // 2. Error Clustering
+    if (stats.errors >= 2 && stats.errors / stats.total > 0.2) {
+      errorClusters += 1;
+      signals.push({
+        signalKey: `error-cluster-${toolId}`,
+        category: "verification",
+        status: "active",
+        summary: `Tool ${toolId} has a high failure rate (${Math.round((stats.errors / stats.total) * 100)}%).`,
+        evidence: [buildMetricEvidence(`toolId=${toolId}; errors=${stats.errors}; total=${stats.total}`)],
+        risk: { level: "high", summary: "Frequent tool failures may indicate upstream outages or corrupted state." },
+        verification: { status: "pending", summary: "Verify if failure is transient or systemic." }
+      });
+    }
+  }
+
+  // Phase 4: Knowledge Hub - Augment audit with shared patterns
+  const dbs: D1Database[] = [input.env.AARONDB];
+  if (input.env.DB) dbs.push(input.env.DB);
+  const hub = new KnowledgeHub(dbs);
+  const sharedPatterns = await hub.queryKnowledge();
+
+  const allProposals = signals.map((signal) => {
+    // Check if the Hub has a relevant pattern for this signal
+    const matchingPattern = sharedPatterns.find(p =>
+      p.category === signal.category &&
+      (p.problemStatement.toLowerCase().includes(signal.summary.toLowerCase()) ||
+       signal.summary.toLowerCase().includes(p.problemStatement.toLowerCase()))
+    );
+
+    const seed = matchingPattern ? {
+      candidateKey: matchingPattern.patternKey,
+      summary: `Cross-pollinated correction: ${matchingPattern.expectedBenefit}`,
+      problemStatement: signal.summary,
+      proposedAction: matchingPattern.proposedAction,
+      expectedBenefit: matchingPattern.expectedBenefit,
+      riskLevel: "low" as const, // Pattern is proven
+      verificationPlan: "Verify via Knowledge Hub success metrics.",
+      derivedFromSignalKeys: [signal.signalKey],
+      evidence: [...signal.evidence, buildMetricEvidence(`knowledge-hub-match=${matchingPattern.patternKey}`)],
+      risk: signal.risk,
+      verification: signal.verification
+    } : {
+      candidateKey: signal.signalKey.replace(/[^a-zA-Z0-9]/g, "-"),
+      summary: `Reflexive correction for ${signal.signalKey}`,
+      problemStatement: signal.summary,
+      proposedAction: "Investigate and stabilize the affected subsystem.",
+      expectedBenefit: "Restores system reliability and performance baseline.",
+      riskLevel: "medium" as const,
+      verificationPlan: "Verify metrics stabilize in future reflexive audit rounds.",
+      derivedFromSignalKeys: [signal.signalKey],
+      evidence: signal.evidence,
+      risk: signal.risk,
+      verification: signal.verification
+    };
+
+    return buildImprovementCandidateRecord(seed, timestamp);
+  });
+
+  const proposalRepository = new AaronDbEdgeSessionRepository(input.env.AARONDB, IMPROVEMENT_PROPOSAL_SESSION_ID);
+  const existingProposalKeys = getStoredProposalKeys((await proposalRepository.getSession())?.toolEvents ?? []);
+  const freshProposals = (allProposals as ImprovementCandidateRecord[]).filter((p) => !existingProposalKeys.has(`audit:${p.candidateKey}`));
+  
+  // Tag them with audit prefix for proposal keys
+  const taggedProposals = freshProposals.map(p => ({
+     ...p,
+     proposalKey: `audit:${p.candidateKey}`,
+     sourceReflectionSessionId: auditSessionId,
+     sourceSessionId: "reflexive-audit",
+     sourceLastTx: 0
+  })) as ImprovementProposalRecord[];
+
+  // Phase 5: Auto-Pilot Promotion Logic
+  // 🧙🏾‍♂️ High-confidence or safe patterns bypass the review queue for the next spawn generation.
+  const processedProposals = taggedProposals.map(p => {
+     if (p.category === "follow-up" && (p.candidateKey.includes("drift") || p.candidateKey.includes("docs"))) {
+        return { ...p, status: "promoted" as const };
+     }
+     return p;
+  });
+
+  // 🧙🏾‍♂️ Simplicity & Provenance.
+  // Phase 4: Governance Bouncer - Filter proposals based on policy.
+  const bouncer = new GovernanceBouncer(input.env.AARONDB);
+  const approvedProposals = await bouncer.filterProposals(processedProposals);
+
+  if (approvedProposals.length > 0) {
+    await ensureSyntheticSession(proposalRepository, timestamp);
+    await proposalRepository.appendToolEvent({
+      timestamp,
+      toolName: "improvement-proposal-review",
+      summary: `Reflexive Audit identified ${latencyAnomalies} latency anomaly(ies) and ${errorClusters} error cluster(s), writing ${approvedProposals.length} proposal(s).`,
+      metadata: {
+        cron: input.cron,
+        generatedProposalCount: approvedProposals.length,
+        proposals: approvedProposals,
+        auditSessionId,
+        latencyAnomalies,
+        errorClusters,
+        audit: buildToolAuditRecord({
+          toolId: "reflexive-audit",
+          actor: "hand-runtime",
+          scope: "hand",
+          outcome: "succeeded",
+          timestamp,
+          handId: "improvement-hand",
+          sessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+          detail: "Reflexive audit completed.",
+          extra: { latencyAnomalies, errorClusters }
+        })
+      }
+    });
+  }
+
+  return {
+    cron: input.cron,
+    auditSessionId,
+    proposalSessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+    reviewedFactCount: auditFacts.results?.length ?? 0,
+    latencyAnomalies,
+    errorClusters,
+    generatedProposalCount: taggedProposals.length
+  };
+}
+
 export interface StoredReflectionArtifact {
   reflectionSessionId: string;
   sourceSessionId: string;
   sourceLastTx: number;
   improvementSignals: ImprovementSignalRecord[];
+  successEvidence: SuccessEvidenceRecord[];
 }
 
 async function listRecentSessionIds(database: D1Database, limit: number): Promise<string[]> {
@@ -1227,6 +1712,7 @@ async function readStoredReflectionArtifact(
 
   const metadata = asJsonObject(latestReflection.metadata);
   const improvementSignals = toImprovementSignalRecords(metadata?.improvementSignals);
+  const successEvidence = (metadata?.successEvidence as SuccessEvidenceRecord[]) || [];
 
   return {
     reflectionSessionId,
@@ -1235,7 +1721,8 @@ async function readStoredReflectionArtifact(
         ? metadata.reflectionFor
         : reflectionSessionId.slice(REFLECTION_PREFIX.length),
     sourceLastTx: typeof metadata?.sourceLastTx === "number" ? metadata.sourceLastTx : 0,
-    improvementSignals
+    improvementSignals,
+    successEvidence
   };
 }
 
@@ -1442,7 +1929,7 @@ function buildUserCorrectionProposal(
   };
 }
 
-interface ImprovementCandidateSeed {
+export interface ImprovementCandidateSeed {
   candidateKey: string;
   summary: string;
   problemStatement: string;
@@ -1454,14 +1941,23 @@ interface ImprovementCandidateSeed {
   evidence: ImprovementEvidenceRecord[];
   risk: ImprovementRiskRecord;
   verification: ImprovementVerificationRecord;
+  complectionScore?: number;
 }
 
 export function buildImprovementCandidateRecord(
   input: ImprovementCandidateSeed,
   timestamp: string
 ): ImprovementCandidateRecord {
-  return {
+  // Phase 4: Governance Bouncer
+  const gResult = applyGovernanceBouncer(input);
+  const governedInput = {
     ...input,
+    expectedBenefit: gResult.passed ? input.expectedBenefit : `${input.expectedBenefit} [GOVERNANCE: ${gResult.reason}]`,
+    riskLevel: gResult.passed ? input.riskLevel : "high" as const
+  };
+
+  return {
+    ...governedInput,
     status: "proposed",
     shadowEvaluation: {
       mode: "bounded-metadata-shadow",
@@ -1493,6 +1989,8 @@ export function buildImprovementCandidateRecord(
       liveMutationApplied: false,
       summary: "No production mutation is applied automatically; this first pass records lifecycle markers only."
     },
+    votes: [],
+    complectionScore: input.complectionScore ?? calculateComplectionScore(input),
     lifecycleHistory: [
       buildLifecycleHistoryEntry({
         action: "propose",
@@ -1569,8 +2067,9 @@ function completeShadowEvaluation(
 
 function applyLifecycleAction(
   proposal: ImprovementProposalRecord,
-  action: Extract<ImprovementLifecycleAction, "pause" | "approve" | "promote" | "reject" | "rollback">,
-  timestamp: string
+  action: ImprovementLifecycleAction,
+  timestamp: string,
+  extra?: JsonObject
 ): ImprovementProposalRecord {
   switch (action) {
     case "pause": {
@@ -1710,6 +2209,56 @@ function applyLifecycleAction(
         ]
       };
     }
+    case "nexus-vote": {
+      const voteData = extra?.vote as unknown as NexusVoteRecord;
+      if (!voteData) return proposal;
+
+      const votes = proposal.votes || [];
+      const existingVoteIndex = votes.findIndex(v => v.voterNodeId === voteData.voterNodeId);
+      const updatedVotes = [...votes];
+      if (existingVoteIndex >= 0) {
+        updatedVotes[existingVoteIndex] = voteData;
+      } else {
+        updatedVotes.push(voteData);
+      }
+
+      let updatedProposal: ImprovementProposalRecord = {
+        ...proposal,
+        votes: updatedVotes,
+        lifecycleHistory: [
+          ...proposal.lifecycleHistory,
+          buildLifecycleHistoryEntry({
+            action,
+            actor: "operator-route",
+            fromStatus: proposal.status,
+            toStatus: proposal.status,
+            timestamp,
+            summary: `Nexus vote recorded from ${voteData.voterLabel} (${voteData.vote}).`
+          })
+        ]
+      };
+
+      // Auto-promotion logic: if > 50% weight approves, auto-promote if pending approval
+      const totalWeight = updatedVotes.reduce((acc, v) => acc + v.weight, 0);
+      const approveWeight = updatedVotes.filter(v => v.vote === "approve").reduce((acc, v) => acc + v.weight, 0);
+
+      if (approveWeight > totalWeight / 2 && updatedProposal.status === "awaiting-approval") {
+        updatedProposal = {
+          ...updatedProposal,
+          status: "approved",
+          approval: {
+            ...updatedProposal.approval,
+            status: "approved",
+            approvedAt: timestamp,
+            summary: `Nexus consensus reached: ${approveWeight}/${totalWeight} weight approved.`
+          }
+        };
+      }
+
+      return updatedProposal;
+    }
+    default:
+      return proposal;
   }
 }
 
@@ -1805,6 +2354,10 @@ function normalizeImprovementProposalRecord(entry: JsonObject | null): Improveme
     shadowEvaluation: normalizeShadowEvaluation(asJsonObject(entry.shadowEvaluation), entry),
     approval: normalizeApproval(asJsonObject(entry.approval)),
     promotion: normalizePromotion(asJsonObject(entry.promotion)),
+    votes: Array.isArray(entry.votes)
+      ? (entry.votes.map((v) => asJsonObject(v)) as unknown as NexusVoteRecord[])
+      : [],
+    complectionScore: typeof entry.complectionScore === "number" ? entry.complectionScore : 0,
     lifecycleHistory: normalizeLifecycleHistory(entry.lifecycleHistory, status, entry.candidateKey)
   };
 }
@@ -2067,6 +2620,77 @@ function tokenize(value: string): string[] {
 
 function trimText(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
+interface GovernanceResult {
+  passed: boolean;
+  reason?: string;
+}
+
+export function applyGovernanceBouncer(candidate: ImprovementCandidateSeed): GovernanceResult {
+  const complectionScore = calculateComplectionScore(candidate);
+  
+  // 🧙🏾‍♂️ Rich Hickey: Complexity is the enemy.
+  const scoreThreshold = 60;
+  
+  if (complectionScore > scoreThreshold) {
+    return { 
+      passed: false, 
+      reason: `Complexity threshold exceeded (Score: ${complectionScore}). Proposal introduces too much complection.` 
+    };
+  }
+
+  if (candidate.evidence.length === 0) {
+    return { passed: false, reason: "Lack of provenance. No evidence provided for candidate." };
+  }
+
+  return { passed: true };
+}
+
+/**
+ * 🧙🏾‍♂️ ComplectionEngine: Quantifying Complexity
+ * Based on Rich Hickey's "Simple vs Easy"
+ */
+function calculateComplectionScore(candidate: ImprovementCandidateSeed): number {
+  let score = 0;
+  const text = (candidate.proposedAction + " " + candidate.summary + " " + candidate.problemStatement).toLowerCase();
+
+  // 1. Structural Complection (Wrappers, Proxies, Layers)
+  if (text.includes("proxy")) score += 30;
+  if (text.includes("wrapper")) score += 25;
+  if (text.includes("layer")) score += 20;
+  if (text.includes("intercept")) score += 15;
+
+  // 2. Statefulness (New attributes, storage, cache)
+  if (text.includes("cache")) score += 20;
+  if (text.includes("store")) score += 15;
+  if (text.includes("state")) score += 10;
+  if (text.includes("persist")) score += 10;
+
+  // 3. Dependency Fan-out (Multiple entities)
+  if (candidate.derivedFromSignalKeys.length > 5) score += 15;
+  if (candidate.evidence.length > 10) score += 5; // Large evidence might imply broad impact
+
+  // 4. Mitigation (De-complecting bonus)
+  if (text.includes("de-complect") || text.includes("simplify") || text.includes("refactor")) {
+    score -= 20;
+  }
+
+  return Math.max(0, score);
+}
+
+class GovernanceBouncer {
+  constructor(private readonly database: D1Database) {}
+
+  async filterProposals(proposals: ImprovementProposalRecord[]): Promise<ImprovementProposalRecord[]> {
+    return proposals.filter(p => {
+       const result = applyGovernanceBouncer(p);
+       if (!result.passed) {
+          console.warn(`Governance Bouncer rejected proposal ${p.proposalKey}: ${result.reason}`);
+       }
+       return result.passed;
+    });
+  }
 }
 
 export const scheduledMaintenanceCrons = {

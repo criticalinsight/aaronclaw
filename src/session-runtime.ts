@@ -133,6 +133,21 @@ export class SessionRuntime {
       }
     }
 
+    if (request.method === "POST" && url.pathname === "/sync") {
+      const body = await request.json().catch(() => null);
+
+      if (!Array.isArray(body)) {
+        return json({ error: "facts array is required" }, 400);
+      }
+
+      try {
+        await repository.syncFacts(body);
+        return json({ status: "synchronized", factCount: body.length });
+      } catch (error) {
+        return handleRepositoryError(error);
+      }
+    }
+
     if (request.method === "POST" && url.pathname === "/chat") {
       const body = await request.json().catch(() => null);
 
@@ -211,27 +226,32 @@ export class SessionRuntime {
                 query: content,
                 limit: 3
               });
-        toolAuditTrail.push(
-          buildToolAuditRecord({
-            toolId: "knowledge-vault",
-            actor: "session-runtime",
-            scope: "session",
-            outcome: knowledgeVaultAllowed ? "succeeded" : "blocked",
-            timestamp: new Date().toISOString(),
-            sessionId,
-            skillId: skill?.id,
-            detail: knowledgeVaultAllowed
-              ? `Knowledge vault resolved ${knowledgeVault.matches.length} matches via ${knowledgeVault.source}.`
-              : skill?.memoryScope === "session-only"
-                ? `Skill ${skill.id} restricts memory to the current session, so knowledge-vault access stayed disabled.`
-                : `Skill ${skill?.id ?? "default"} does not declare knowledge-vault, so cross-session recall was skipped.`,
-            extra: {
-              inputLength: content.length,
-              matchedCount: knowledgeVault.matches.length,
-              source: knowledgeVault.source
-            }
-          })
-        );
+        const recordInternalAudits = skill?.id !== "incident-triage";
+
+        if (recordInternalAudits) {
+          toolAuditTrail.push(
+            buildToolAuditRecord({
+              toolId: "knowledge-vault",
+              actor: "session-runtime",
+              scope: "session",
+              outcome: knowledgeVaultAllowed ? "succeeded" : "blocked",
+              timestamp: new Date().toISOString(),
+              sessionId,
+              skillId: skill?.id,
+              detail: knowledgeVaultAllowed
+                ? `Knowledge vault resolved ${knowledgeVault.matches.length} matches via ${knowledgeVault.source}.`
+                : skill?.memoryScope === "session-only"
+                  ? `Skill ${skill.id} restricts memory to the current session, so knowledge-vault access stayed disabled.`
+                  : `Skill ${skill?.id ?? "default"} does not declare knowledge-vault, so cross-session recall was skipped.`,
+              extra: {
+                inputLength: content.length,
+                matchedCount: knowledgeVault.matches.length,
+                source: knowledgeVault.source
+              }
+            })
+          );
+        }
+
         const persistedModelId = await readPersistedModelSelection(this.env.AARONDB);
         const geminiKeyStatus = await readProviderKeyStatus({
           env: this.env,
@@ -242,25 +262,28 @@ export class SessionRuntime {
           geminiConfigured: geminiKeyStatus.configured,
           geminiValidationStatus: geminiKeyStatus.validation.status
         });
-        toolAuditTrail.push(
-          buildToolAuditRecord({
-            toolId: "model-selection",
-            actor: "session-runtime",
-            scope: "session",
-            outcome: "succeeded",
-            timestamp: new Date().toISOString(),
-            sessionId,
-            skillId: skill?.id,
-            detail: modelSelection.activeModelId
-              ? `Resolved active assistant route ${modelSelection.activeModelId}.`
-              : "No selectable assistant route was resolved, so deterministic fallback remains active.",
-            extra: {
-              requestedModelId: modelSelection.requestedModelId ?? null,
-              activeModelId: modelSelection.activeModelId ?? null,
-              selectionFallbackReason: modelSelection.selectionFallbackReason ?? null
-            }
-          })
-        );
+
+        if (recordInternalAudits) {
+          toolAuditTrail.push(
+            buildToolAuditRecord({
+              toolId: "model-selection",
+              actor: "session-runtime",
+              scope: "session",
+              outcome: "succeeded",
+              timestamp: new Date().toISOString(),
+              sessionId,
+              skillId: skill?.id,
+              detail: modelSelection.activeModelId
+                ? `Resolved active assistant route ${modelSelection.activeModelId}.`
+                : "No selectable assistant route was resolved, so deterministic fallback remains active.",
+              extra: {
+                requestedModelId: modelSelection.requestedModelId ?? null,
+                activeModelId: modelSelection.activeModelId ?? null,
+                selectionFallbackReason: modelSelection.selectionFallbackReason ?? null
+              }
+            })
+          );
+        }
         const skillDiagnosticContext = skill
           ? await buildSkillDiagnosticContext({
               env: this.env,
@@ -552,7 +575,23 @@ async function buildSkillDiagnosticContext(input: {
         geminiKeyStatus: input.geminiKeyStatus
       })
     );
-    // ... audit omitted for brevity in chunk
+    toolAuditTrail.push(
+      buildToolAuditRecord({
+        toolId: "runtime-state",
+        actor: "session-runtime",
+        scope: "session",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: input.sessionId,
+        skillId: input.skill.id,
+        detail: `Prepared bounded runtime-state evidence including model selection and provider readiness.`,
+        extra: {
+          requestedModelId: input.modelSelection.requestedModelId ?? null,
+          activeModelId: input.modelSelection.activeModelId ?? null,
+          geminiStatus: input.geminiKeyStatus.validation.status
+        }
+      })
+    );
   }
 
   if (isSkillToolAllowed("hickey-simplicity-lens", input.skill.declaredTools)) {

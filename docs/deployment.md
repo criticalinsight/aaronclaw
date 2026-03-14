@@ -25,7 +25,7 @@ What is verified today:
 
 - the repo contains a working **manual** Wrangler deploy path
 - the approved branch is still `plan-cloudflare-openclaw`
-- the public production Worker is `https://aaronclaw.moneyacad.workers.dev`
+- the public production Worker is `https://aaronclaw.workers.dev`
 
 What is **not** verified today:
 
@@ -212,7 +212,7 @@ npm run deploy
 
 ## Current live posture
 
-The current public deployment at `https://aaronclaw.moneyacad.workers.dev` is
+The current public deployment at `https://aaronclaw.workers.dev` is
 working. As of the current rollout, `GET /health` reports:
 
 - `authMode: bearer-token`
@@ -226,8 +226,9 @@ working. As of the current rollout, `GET /health` reports:
 - `VECTOR_INDEX` mapped; `CONFIG_KV` and `ARCHIVE` not mounted
 
 That means the landing page and `/health` remain public, while `/api/*`
-(including `/api/model`, `/api/key`, `/api/skills`, `/api/hands`, and
-`/api/improvements`) require the current bearer token. This is still a
+(including `/api/model`, `/api/key`, `/api/skills`, `/api/hands`,
+`/api/improvements`, and the autonomous engines: `economos`, `sophia`,
+`architectura`, and `aeturnus`) require the current bearer token. This is still a
 single-operator deployment posture; for stronger identity and policy
 enforcement, front it with Cloudflare Access.
 
@@ -251,7 +252,7 @@ user identity, session management, or Cloudflare Access policies.
 These checks match the current runtime behavior:
 
 ```sh
-curl -I https://aaronclaw.moneyacad.workers.dev/
+curl -I https://aaronclaw.workers.dev/
 curl -sS https://aaronclaw.workers.dev/health
 ```
 

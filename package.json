@@ -18,9 +18,9 @@
   "type": "module",
   "private": true,
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250303.0",
+    "@cloudflare/workers-types": "^4.20260313.1",
     "typescript": "^5.8.2",
     "vitest": "^3.0.0",
-    "wrangler": "^4.6.0"
+    "wrangler": "^4.72.0"
   }
 }

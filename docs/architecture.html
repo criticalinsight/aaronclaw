@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Architecture | AaronClaw Docs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AARONCLAW / SCHEMATIC</h1>
+            <nav>
+                <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
+                <a href="hands.html">Hands</a>
+                <a href="skills.html">Skills</a>
+                <a href="api.html">API</a>
+                <a href="architecture.html" class="active">Architecture</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        <h2>Architecture & Philosophy</h2>
+        
+        <div class="hero">
+            <h3>Provenance & Simplicity</h3>
+            <p>Built on the belief that state should be immutable, identity should be de-complected from transport, and every action must have clear provenance.</p>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h3>Documentation Contract</h3>
+                <p>The system periodically checks its own documentation for drift using the <code>docs-drift</code> hand.</p>
+                <ul>
+                    <li><strong>Primary Path:</strong> docs/setup.md</li>
+                    <li><strong>Core Section:</strong> What to expect locally</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>AaronDB Substrate</h3>
+                <p>A Datalog-flavored fact log built on Cloudflare D1. Optimized for hyper-recall and structured state projections.</p>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

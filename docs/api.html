@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>API Reference | AaronClaw Docs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AARONCLAW / SCHEMATIC</h1>
+            <nav>
+                <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
+                <a href="hands.html">Hands</a>
+                <a href="skills.html">Skills</a>
+                <a href="api.html" class="active">API</a>
+                <a href="architecture.html">Architecture</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        <h2>API Surface</h2>
+        
+        <h3>Operator Routes</h3>
+        <p class="muted">Protected administrative endpoints for managing system state.</p>
+        <div class="card">
+            <pre><code>GET /api/model
+POST /api/model
+GET /api/key
+POST /api/key
+GET /api/improvements
+GET /api/improvements/:proposalKey
+POST /api/improvements/:proposalKey/approve
+POST /api/improvements/:proposalKey/reject
+POST /api/improvements/:proposalKey/pause
+GET /api/skills
+GET /api/skills/:id
+GET /api/hands
+GET /api/hands/:id
+POST /api/hands/:id/activate
+POST /api/hands/:id/pause</code></pre>
+        </div>
+
+        <h3>Session Routes</h3>
+        <p class="muted">Live conversation and state management endpoints.</p>
+        <div class="card">
+            <pre><code>POST /api/sessions
+GET /api/sessions/:id
+POST /api/sessions/:id/chat
+POST /api/sessions/:id/messages
+POST /api/sessions/:id/tool-events
+GET /api/sessions/:id/recall?q=...
+POST /api/sessions/:id/sync</code></pre>
+        </div>
+    </main>
+</body>
+</html>

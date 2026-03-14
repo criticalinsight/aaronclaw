@@ -28,7 +28,11 @@ import {
   readPersistedModelSelection,
   setPersistedModelSelection
 } from "./model-selection-store";
-import { readImprovementProposalState, recordImprovementLifecycleAction } from "./reflection-engine";
+import { 
+  readImprovementProposalState, 
+  recordImprovementLifecycleAction,
+  resolveFactsAsOf
+} from "./reflection-engine";
 import { SessionRuntime } from "./session-runtime";
 import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
 import {
@@ -39,6 +43,21 @@ import {
   parseTelegramUpdate,
   sendTelegramReply
 } from "./telegram";
+import { discoverResources, generateWranglerConfig } from "./wiring-engine";
+import { createGithubRepository, pushFilesToGithub, setupGithubActions } from "./github-coordinator";
+import { NexusMesh, NexusPeer } from "./nexus-mesh";
+import {
+  parseDomainDeclaration,
+  synthesizeD1Migration,
+  synthesizeTypescriptTypes,
+  synthesizeUiManifest
+} from "./aether-engine";
+import { simulateDomainSynthesis } from "./oracle-engine";
+import { auditInfrastructureDrift, getSovereignMetrics, rebalanceInfrastructure } from "./sovereign-engine";
+import { auditEfficiency, getEconomosMetrics } from "./economos-engine";
+import { discoverPatterns, getSophiaYield } from "./sophia-engine";
+import { getArchitecturaPropositions, proposeOptimizations } from "./architectura-engine";
+import { getSwarmStatus, initiateSelfHealing } from "./aeturnus-engine";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
@@ -94,6 +113,130 @@ async function buildRuntimeOptions(env: Env) {
     selectionFallbackReason: selection.selectionFallbackReason,
     hasAiBinding: Boolean(env.AI)
   };
+}
+
+async function handleTelemetryRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw: Streaming the immutable fact log for tactical awareness.
+  try {
+    const facts = await env.AARONDB.prepare(
+      "SELECT * FROM facts ORDER BY createdAt DESC LIMIT 50"
+    ).all();
+    return json({ facts: facts.results });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+async function handleSpawnRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw: Automating the emergence of new structures.
+  try {
+    const body = (await request.json().catch(() => ({}))) as any;
+    const name = body.name;
+    const prompt = body.prompt;
+    const bootstrapExtension = body.bootstrapExtension;
+    const declaration = body.declaration;
+
+    if (!name) return json({ error: "name is required" }, 400);
+
+    // 1. Discover Resources
+    const resources = await discoverResources(env);
+
+    // 2. Generate Configuration
+    const wranglerConfig = generateWranglerConfig(name, resources);
+
+    // 3. GitHub Orchestration
+    const githubToken = env.GITHUB_TOKEN;
+    if (!githubToken) throw new Error("GITHUB_TOKEN is not configured");
+
+    // Get user info to find owner
+    const userResp = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `token ${githubToken}`,
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "AaronClaw-Software-Factory"
+      }
+    });
+    if (!userResp.ok) throw new Error("Failed to fetch GitHub user info");
+    const userData = (await userResp.json()) as any;
+    const owner = userData.login;
+
+    // Create Repository
+    await createGithubRepository(githubToken, {
+      owner,
+      repo: name,
+      description: `Spawning agent: ${prompt ? prompt.substring(0, 50) : "No prompt provided"}${bootstrapExtension ? ` (Evolved from ${bootstrapExtension.sourceProposalKey})` : ""}`,
+      private: true
+    });
+
+    const initialTruth = bootstrapExtension 
+      ? `// Evolved Truth: Derived from ${bootstrapExtension.sourceProposalKey}\n// Proposed Action: ${bootstrapExtension.proposedAction}\n// Pattern: ${bootstrapExtension.pattern}\n\n`
+      : "";
+
+    const files: { path: string, content: string }[] = [
+      { path: "wrangler.jsonc", content: wranglerConfig },
+      {
+        path: "package.json",
+        content: JSON.stringify(
+          {
+            name,
+            version: "0.1.0",
+            devDependencies: {
+              wrangler: "^3.0.0"
+            },
+            scripts: {
+              deploy: "wrangler deploy"
+            }
+          },
+          null,
+          2
+        )
+      }
+    ];
+
+    if (declaration) {
+      // 🧙🏾‍♂️ Oracle: Speculative Simulation
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      const simulation = await simulateDomainSynthesis(currentState, declaration);
+
+      if (simulation.verdict === 'reject') {
+        return json({
+          error: "Synthesis Rejected by Oracle",
+          risk: simulation.riskAssessment,
+          delta: simulation.delta
+        }, 403);
+      }
+
+      const domain = parseDomainDeclaration(typeof declaration === 'string' ? declaration : JSON.stringify(declaration));
+      const sql = synthesizeD1Migration(domain);
+      const types = synthesizeTypescriptTypes(domain);
+      const ui = synthesizeUiManifest(domain);
+
+      files.push({ path: "migrations/0001_domain_init.sql", content: sql.join("\n\n") });
+      files.push({ path: "src/types.ts", content: types });
+      files.push({ 
+          path: "src/index.ts", 
+          content: `${initialTruth}import { ${domain.domain.split("/").map(p => p.charAt(0).toUpperCase() + p.slice(1)).join("")} } from "./types";\n\nexport default {\n  async fetch(request, env, ctx) {\n    return new Response(JSON.stringify({ status: "Domain ${domain.domain} Online", ui: ${JSON.stringify(ui)} }), { headers: { "content-type": "application/json" } });\n  }\n};` 
+      });
+    } else {
+      files.push({
+          path: "src/index.ts",
+          content: `${initialTruth}export default { \n  async fetch(request, env, ctx) { \n    return new Response("Hello from ${name}! Status: Spawning complete."); \n  } \n};`
+      });
+    }
+
+    await pushFilesToGithub(githubToken, owner, name, "main", files, "Initial spawn from AaronClaw");
+
+    // Setup CI/CD
+    await setupGithubActions(githubToken, owner, name);
+
+    return json({
+      status: "spawned",
+      name,
+      url: `https://github.com/${owner}/${name}`
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
 }
 
 function buildRuntimeStatus(options: Awaited<ReturnType<typeof buildRuntimeOptions>>) {
@@ -344,6 +487,34 @@ function protectedKeyManagementUnavailable(): Response {
   );
 }
 
+async function handleNexusPeersRoute(request: Request, env: Env): Promise<Response> {
+  const dbs: D1Database[] = [env.AARONDB];
+  if (env.DB) dbs.push(env.DB);
+  const mesh = new NexusMesh(dbs);
+
+  if (request.method === "GET") {
+    const peers = await mesh.listPeers();
+    return json({ peers });
+  }
+
+  if (request.method === "POST") {
+    const body = await request.json().catch(() => null);
+    if (!isJsonObject(body) || typeof body.id !== "string" || typeof body.url !== "string" || typeof body.label !== "string") {
+      return json({ error: "id, url, and label are required for peer registration" }, 400);
+    }
+
+    await mesh.registerPeer({
+      id: body.id,
+      url: body.url,
+      label: body.label
+    });
+
+    return json({ status: "registered", id: body.id }, 201);
+  }
+
+  return json({ error: "method not allowed", methods: ["GET", "POST"] }, 405);
+}
+
 async function handleModelRoute(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") {
     return json(await buildModelSelectionPayload(env));
@@ -537,13 +708,12 @@ async function handleImprovementRoute(
     return null;
   }
 
-  const proposalState = await readImprovementProposalState({ env });
-
   if (route.action === "list") {
     if (request.method !== "GET") {
       return json({ error: "method not allowed", methods: ["GET"] }, 405);
     }
 
+    const proposalState = await readImprovementProposalState({ env });
     const proposals = [...proposalState.proposals].sort((left, right) => {
       const leftTimestamp = left.lifecycleHistory[left.lifecycleHistory.length - 1]?.timestamp ?? left.proposalKey;
       const rightTimestamp = right.lifecycleHistory[right.lifecycleHistory.length - 1]?.timestamp ?? right.proposalKey;
@@ -553,6 +723,7 @@ async function handleImprovementRoute(
     return json({ proposalSessionId: proposalState.proposalSessionId, proposals });
   }
 
+  const proposalState = await readImprovementProposalState({ env });
   const proposalKey = route.proposalKey;
   if (!proposalKey) {
     return json({ error: "proposal key is required" }, 400);
@@ -631,7 +802,6 @@ export default {
         }
       });
     }
-
     if ((request.method === "GET" || isHeadRequest) && url.pathname === "/health") {
       return isHeadRequest
         ? new Response(null, {
@@ -642,8 +812,18 @@ export default {
         : json(status);
     }
 
+    if (request.method === "GET" && url.pathname === "/api/telemetry") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return handleTelemetryRoute(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
       return handleTelegramWebhook(request, env, ctx);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/spawn") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return handleSpawnRoute(request, env);
     }
 
     if (url.pathname.startsWith("/api/") && !isAuthorized(request, env)) {
@@ -656,6 +836,80 @@ export default {
 
     if (url.pathname === "/api/key") {
       return handleKeyRoute(request, env);
+    }
+
+    if (url.pathname === "/api/sovereign/metrics") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      const drift = await auditInfrastructureDrift(env, currentState);
+      const metrics = getSovereignMetrics(env, drift);
+      return json(metrics);
+    }
+
+    if (url.pathname === "/api/sovereign/rebalance") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      const result = await rebalanceInfrastructure(env, currentState);
+      return json(result);
+    }
+
+    if (url.pathname === "/api/reflect/as-of") {
+      return handleNexusPeersRoute(request, env);
+    }
+
+    if (url.pathname === "/api/economos/metrics") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const metrics = await getEconomosMetrics(env);
+      return json(metrics);
+    }
+
+    if (url.pathname === "/api/economos/audit") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      const audit = await auditEfficiency(env, currentState);
+      return json(audit);
+    }
+
+    if (url.pathname === "/api/sophia/yield") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const yieldResult = await getSophiaYield(env);
+      return json(yieldResult);
+    }
+
+    if (url.pathname === "/api/sophia/harvest") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      // For this implementation, we simulate the Economos history based on current facts
+      const currentEfficiency = await auditEfficiency(env, currentState);
+      const harvest = await discoverPatterns(env, currentState, [currentEfficiency]);
+      return json(harvest);
+    }
+
+    if (url.pathname === "/api/architectura/propositions") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const report = await getArchitecturaPropositions(env);
+      return json(report);
+    }
+
+    if (url.pathname === "/api/architectura/optimize") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const currentState = await resolveFactsAsOf(env, new Date().toISOString());
+      const currentEfficiency = await auditEfficiency(env, currentState);
+      const currentYield = await discoverPatterns(env, currentState, [currentEfficiency]);
+      const report = await proposeOptimizations(env, currentYield, currentEfficiency);
+      return json(report);
+    }
+
+    if (url.pathname === "/api/aeturnus/status") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const status = await getSwarmStatus(env);
+      return json(status);
+    }
+
+    if (url.pathname === "/api/aeturnus/recover" && request.method === "POST") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      const result = await initiateSelfHealing(env);
+      return json(result);
     }
 
     const handRouteResponse = await handleHandRoute(request, env, url.pathname);
@@ -731,6 +985,10 @@ export default {
         }
 
         return stub.fetch(buildRuntimeUrl("/recall", sessionRoute.sessionId, query));
+      }
+
+      if (request.method === "POST" && sessionRoute.action === "sync") {
+        return proxyJsonBody(request, stub, "/sync", sessionRoute.sessionId);
       }
     }
 

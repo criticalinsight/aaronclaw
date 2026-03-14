@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Hands | AaronClaw Docs</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1>AARONCLAW / SCHEMATIC</h1>
+            <nav>
+                <a href="index.html">Overview</a>
+                <a href="roadmap.html">Roadmap</a>
+                <a href="hands.html" class="active">Hands</a>
+                <a href="skills.html">Skills</a>
+                <a href="api.html">API</a>
+                <a href="architecture.html">Architecture</a>
+            </nav>
+        </div>
+    </header>
+    <main class="container">
+        <h2>System Hands</h2>
+        <p class="muted">Hands are high-order orchestrators that manage background tasks and system integrity.</p>
+        <div class="grid">
+            
+            <div class="card">
+                <h3>Scheduled maintenance hand</h3>
+                <p>Reuses the existing reflection/maintenance path on Cloudflare cron triggers without introducing a separate runtime.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>scheduled-maintenance</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Improvement Hand</h3>
+                <p>Periodically reviews stored reflection signals and writes bounded structured proposals into the improvement candidate store without mutating production behavior.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>improvement-hand</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>User Correction Miner</h3>
+                <p>Mines repeated user/operator corrections from recent session history, attaches bounded evidence, and writes review-only improvement proposals without mutating live behavior.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>user-correction-miner</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Regression Watch</h3>
+                <p>Detects bounded fallback/tool/hand regressions from existing session and hand history, then records evidence-backed findings for operator review.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>regression-watch</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Provider health watchdog</h3>
+                <p>Checks provider/model/key readiness plus recent chat and Telegram fallback signals, then persists structured operator-visible findings without mutating runtime state.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>provider-health-watchdog</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Docs drift hand</h3>
+                <p>Compares a bounded bundled docs contract against shipped runtime posture and records reviewable findings without editing repo docs automatically.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>docs-drift</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *, 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>TTL garbage collector</h3>
+                <p>Prunes facts that have exceeded their designated time-to-live.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>ttl-garbage-collector</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Orphan fact cleanup</h3>
+                <p>Identifies and removes facts without valid provenance links.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>orphan-fact-cleanup</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Vector index reconciler</h3>
+                <p>Ensures D1 facts are correctly mirrored in the Vectorize index.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>vector-index-reconciler</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Daily briefing generator</h3>
+                <p>Compiles the morning brief for the operator.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>daily-briefing-generator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>GitHub Coordinator</h3>
+                <p>Manages repository creation, branch strategies, and PR generation for self-spawning apps.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>github-coordinator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 0 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Documentation Factory</h3>
+                <p>Autonomously generates and deploys the Schematic-styled docs site to GitHub and Cloudflare by extracting truth from the runtime catalogs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>docs-factory</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 0 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Error cluster detector</h3>
+                <p>Groups recent tool failures into actionable clusters.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>error-cluster-detect</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Credential leak watchdog</h3>
+                <p>Scans for sensitive keys in audit logs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>credential-leak-watchdog</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Usage spike analyzer</h3>
+                <p>Identifies anomalous token consumption.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>usage-spike-analyzer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Latent reflection miner</h3>
+                <p>Finds deep patterns in historic reflection sessions.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>latent-reflection-miner</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Latency anomaly detector</h3>
+                <p>Flags tools with degrading response times.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>latency-anomaly-detector</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Tool performance baseline</h3>
+                <p>Establishes 'normal' timing for all tool executions.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>tool-performance-baseline</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Stale session archiver</h3>
+                <p>Moves old sessions to long-term storage.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>stale-session-archiver</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Active session prewarmer</h3>
+                <p>Loads context for recently active sessions.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>active-session-prewarmer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Durable Object storage watch</h3>
+                <p>Monitors storage limits for the runtime.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>durable-object-storage-watch</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Dependency drifter</h3>
+                <p>Checks vendored source against upstream updates.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>dependency-drifter</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Secret rotation checker</h3>
+                <p>Reminds operator to rotate sensitive keys.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>secret-rotation-check</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Audit log compactor</h3>
+                <p>Compresses historic audit trials.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>audit-log-compactor</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Schema integrity checker</h3>
+                <p>Validates D1 and AaronDB schema parity.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>schema-integrity-checker</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Token budget enforcer</h3>
+                <p>Limits daily spend on LLM providers.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>token-budget-enforcer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Prompt injection watchdog</h3>
+                <p>Scans for jailbreak patterns in history.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>prompt-injection-watchdog</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Reproducibility guard</h3>
+                <p>Ensures similar inputs yielded similar results.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>reproducibility-guard</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Context optimizer</h3>
+                <p>Prunes noisy messages from session context.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>context-optimizer</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Sentiment drift watch</h3>
+                <p>Flags degrading helpfulness in AI responses.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>sentiment-drift-watch</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Capability mapper</h3>
+                <p>Updates the matrix of live tools and their health.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>capability-mapper</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Knowledge vault pruner</h3>
+                <p>Removes duplicate or stale vector embeddings.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>knowledge-vault-pruner</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Compliance sweeper</h3>
+                <p>Ensures logs comply with data retention rules.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>compliance-sweeper</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Website Factory</h3>
+                <p>Synthesizes and deploys websites based on natural language prompts received from Telegram or other interfaces.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>website-factory</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 8 * * *</li>
+                </ul>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

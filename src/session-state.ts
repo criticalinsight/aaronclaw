@@ -19,7 +19,7 @@ type AaronDbAttribute =
   | "metadata"
   | "memoryTerm";
 
-interface AaronDbFactRecord {
+export interface AaronDbFactRecord {
   sessionId: string;
   entity: string;
   attribute: AaronDbAttribute;
@@ -106,6 +106,7 @@ export interface SessionStateRepository {
     limit?: number;
     asOf?: number;
   }): Promise<RecallMatch[]>;
+  syncFacts(facts: AaronDbFactRecord[]): Promise<void>;
 }
 
 type AaronDbEntityIndex = Map<AaronDbAttribute, AaronDbFactRecord[]>;
@@ -329,10 +330,14 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
   private hydratePromise: Promise<void> | null = null;
   private currentProjection: SessionRecord | null = null;
 
+  private readonly databases: D1Database[];
+
   constructor(
-    private readonly database: D1Database,
+    databaseOrDatabases: D1Database | D1Database[],
     private readonly sessionId: string
-  ) {}
+  ) {
+    this.databases = Array.isArray(databaseOrDatabases) ? databaseOrDatabases : [databaseOrDatabases];
+  }
 
   async createSession(timestamp: string): Promise<SessionRecord> {
     await this.ensureHydrated();
@@ -606,31 +611,60 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
   }
 
   private async hydrate(): Promise<void> {
-    const result = await this.database
-      .prepare(FACT_SELECT_SQL)
-      .bind(this.sessionId)
-      .all<AaronDbFactRow>();
+    const allFacts: AaronDbFactRecord[] = [];
+    const seenTx = new Set<string>();
 
-    const facts = (result.results ?? []).map((row) => ({
-      sessionId: row.session_id,
-      entity: row.entity,
-      attribute: row.attribute,
-      value: JSON.parse(row.value_json) as JsonValue,
-      tx: row.tx,
-      txIndex: row.tx_index,
-      occurredAt: row.occurred_at,
-      operation: row.operation
-    }));
+    const results = await Promise.all(
+      this.databases.map((db) =>
+        db
+          .prepare(FACT_SELECT_SQL)
+          .bind(this.sessionId)
+          .all<AaronDbFactRow>()
+      )
+    );
 
-    this.memoryIndex.reset(facts);
+    for (const result of results) {
+      for (const row of result.results ?? []) {
+        const txKey = `${row.tx}:${row.tx_index}`;
+        if (seenTx.has(txKey)) {
+          continue;
+        }
+
+        seenTx.add(txKey);
+        allFacts.push({
+          sessionId: row.session_id,
+          entity: row.entity,
+          attribute: row.attribute,
+          value: JSON.parse(row.value_json) as JsonValue,
+          tx: row.tx,
+          txIndex: row.tx_index,
+          occurredAt: row.occurred_at,
+          operation: row.operation
+        });
+      }
+    }
+
+    // Sort facts by tx and txIndex to ensure correct replay order
+    allFacts.sort((a, b) => a.tx - b.tx || a.txIndex - b.txIndex);
+
+    this.memoryIndex.reset(allFacts);
     this.currentProjection = this.project();
     this.hydrated = true;
   }
 
+  async syncFacts(facts: AaronDbFactRecord[]): Promise<void> {
+    await this.appendFacts(facts);
+  }
+
   private async appendFacts(facts: AaronDbFactRecord[]): Promise<void> {
-    await this.database.batch(
+    const primaryDb = this.databases[0];
+    if (!primaryDb) {
+      throw new Error("No primary database available for persistence");
+    }
+
+    await primaryDb.batch(
       facts.map((fact) =>
-        this.database
+        primaryDb
           .prepare(FACT_INSERT_SQL)
           .bind(
             fact.sessionId,

@@ -91,16 +91,21 @@ export interface AaronDbEdgeSessionRuntimeMount {
 }
 
 export function mountAaronDbEdgeSessionRuntime(
-  env: Pick<Env, "AARONDB">,
+  env: Pick<Env, "AARONDB" | "DB">,
   state: Pick<DurableObjectState, "id">,
   sessionId: string
 ): AaronDbEdgeSessionRuntimeMount {
+  const dbs: D1Database[] = [env.AARONDB];
+  if (env.DB) {
+    dbs.push(env.DB);
+  }
+
   return {
     substrate: AARONDB_EDGE_SUBSTRATE,
     sessionId,
     durableObjectId: state.id.toString(),
     adapter: "compatibility-repository",
-    repository: new AaronDbEdgeSessionRepository(env.AARONDB, sessionId)
+    repository: new AaronDbEdgeSessionRepository(dbs, sessionId)
   };
 }
 

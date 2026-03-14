@@ -2,13 +2,17 @@ import {
   buildImprovementCandidateRecord,
   IMPROVEMENT_PROPOSAL_SESSION_ID,
   listRecentStoredReflectionArtifacts,
+  readImprovementProposalState,
   type ImprovementEvidenceRecord,
   type ImprovementProposalRecord,
   runScheduledImprovementProposalReview,
   runScheduledImprovementShadowEvaluation,
   runScheduledUserCorrectionMining,
   runScheduledMaintenance,
-  scheduledMaintenanceCrons
+  runReflexiveAudit,
+  runAutonomousEvolution,
+  scheduledMaintenanceCrons,
+  type ReflexiveAuditResult
 } from "./reflection-engine";
 import { runScheduledDocsDriftReview, type DocsDriftFinding } from "./docs-drift";
 import { runProviderHealthWatchdog, type ProviderHealthFinding } from "./provider-health-watchdog";
@@ -16,6 +20,8 @@ import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
 import { AaronDbEdgeSessionRepository, type JsonObject, type ToolEvent } from "./session-state";
 import { buildToolAuditRecord } from "./tool-policy";
+import { KnowledgeHub } from "./knowledge-hub";
+import { queryKnowledgeVault } from "./knowledge-vault";
 
 import { bundledHandDefinitions, type BundledHandDefinition } from "./hands-catalog";
 import { runGithubCoordinator as githubCoordinatorImpl } from "./github-coordinator";
@@ -82,6 +88,8 @@ export interface HandRunRecord {
   generatedProposalCount: number;
   evaluatedProposalCount: number;
   awaitingApprovalCount: number;
+  promotedProposalCount: number;
+  spawnedAgentCount: number;
   skippedDuplicateProposalCount: number;
   reviewedDocumentCount: number;
   reviewedClaimCount: number;
@@ -299,11 +307,13 @@ function buildHandSessionId(handId: string): string {
 }
 
 async function ensureHandRepository(
-  env: Pick<Env, "AARONDB">,
+  env: Pick<Env, "AARONDB" | "DB">,
   definition: BundledHandDefinition,
   timestamp: string
 ): Promise<AaronDbEdgeSessionRepository> {
-  const repository = new AaronDbEdgeSessionRepository(env.AARONDB, buildHandSessionId(definition.id));
+  const dbs: D1Database[] = [env.AARONDB];
+  if (env.DB) dbs.push(env.DB);
+  const repository = new AaronDbEdgeSessionRepository(dbs, buildHandSessionId(definition.id));
   await repository.createSession(timestamp);
   return repository;
 }
@@ -312,6 +322,7 @@ async function executeBundledHandRun(input: {
   env: Pick<
     Env,
     | "AARONDB"
+    | "DB"
     | "AI"
     | "AI_MODEL"
     | "APP_AUTH_TOKEN"
@@ -382,22 +393,37 @@ async function executeBundledHandRun(input: {
         cron: input.cron,
         timestamp: input.timestamp
       });
+      const reflexiveAudit = await runReflexiveAudit({
+        env: input.env,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+
+      // Recursive Evolution: Spawn improved agents from "Promoted" proposals
+      const recursiveEvolution = await triggerRecursiveEvolution({
+        env: input.env,
+        timestamp: input.timestamp
+      });
 
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
-        summary: `${input.definition.label} reviewed ${proposalReview.reviewedSignalCount} stored signal(s), wrote ${proposalReview.generatedProposalCount} structured proposal(s), and completed bounded shadow evaluation for ${shadowEvaluation.evaluatedProposalCount} proposal(s) for cron ${input.cron}.`,
+        summary: `${input.definition.label} reviewed ${proposalReview.reviewedSignalCount} signals, wrote ${proposalReview.generatedProposalCount + reflexiveAudit.generatedProposalCount} proposals, evaluated ${shadowEvaluation.evaluatedProposalCount} candidates, and spawned ${recursiveEvolution.spawnedAgentCount} improved agent(s) for cron ${input.cron}.`,
         metadata: {
           action: "run",
           awaitingApprovalCount: shadowEvaluation.awaitingApprovalCount,
           cron: input.cron,
           evaluatedProposalCount: shadowEvaluation.evaluatedProposalCount,
-          generatedProposalCount: proposalReview.generatedProposalCount,
+          generatedProposalCount: proposalReview.generatedProposalCount + reflexiveAudit.generatedProposalCount,
           handId: input.definition.id,
           proposalSessionId: proposalReview.proposalSessionId,
           reviewedReflectionCount: proposalReview.reviewedReflectionSessionIds.length,
           reviewedSignalCount: proposalReview.reviewedSignalCount,
           skippedDuplicateProposalCount: proposalReview.skippedDuplicateProposalCount,
+          promotedProposalCount: recursiveEvolution.promotedCount,
+          spawnedAgentCount: recursiveEvolution.spawnedAgentCount,
+          latencyAnomalies: reflexiveAudit.latencyAnomalies,
+          errorClusters: reflexiveAudit.errorClusters,
           status: "succeeded",
           audit: buildToolAuditRecord({
             toolId: "hand-run",
@@ -406,16 +432,12 @@ async function executeBundledHandRun(input: {
             outcome: "succeeded",
             timestamp: input.timestamp,
             handId: input.definition.id,
-            detail: `${input.definition.label} completed successfully for cron ${input.cron}.`,
+            detail: `${input.definition.label} completed successfully with recursive evolution.`,
             extra: {
-              awaitingApprovalCount: shadowEvaluation.awaitingApprovalCount,
               cron: input.cron,
-              evaluatedProposalCount: shadowEvaluation.evaluatedProposalCount,
-              generatedProposalCount: proposalReview.generatedProposalCount,
-              proposalSessionId: proposalReview.proposalSessionId,
-              reviewedReflectionCount: proposalReview.reviewedReflectionSessionIds.length,
-              reviewedSignalCount: proposalReview.reviewedSignalCount,
-              skippedDuplicateProposalCount: proposalReview.skippedDuplicateProposalCount
+              spawnedAgentCount: recursiveEvolution.spawnedAgentCount,
+              latencyAnomalies: reflexiveAudit.latencyAnomalies,
+              errorClusters: reflexiveAudit.errorClusters
             }
           })
         }
@@ -485,10 +507,14 @@ async function executeBundledHandRun(input: {
         metadata: {
           action: "run",
           cron: input.cron,
+          findingCount: regressionReview.findingCount,
+          findings: regressionReview.findings,
           generatedProposalCount: regressionReview.generatedProposalCount,
           handId: input.definition.id,
           proposalSessionId: regressionReview.proposalSessionId,
+          reviewedReflectionCount: regressionReview.reviewedReflectionCount,
           reviewedSignalCount: regressionReview.reviewedSignalCount,
+          skippedDuplicateProposalCount: regressionReview.skippedDuplicateProposalCount,
           status: "succeeded",
           audit: buildToolAuditRecord({
             toolId: "hand-run",
@@ -500,9 +526,12 @@ async function executeBundledHandRun(input: {
             detail: `${input.definition.label} completed successfully for cron ${input.cron}.`,
             extra: {
               cron: input.cron,
+              findingCount: regressionReview.findingCount,
               generatedProposalCount: regressionReview.generatedProposalCount,
               proposalSessionId: regressionReview.proposalSessionId,
-              reviewedSignalCount: regressionReview.reviewedSignalCount
+              reviewedReflectionCount: regressionReview.reviewedReflectionCount,
+              reviewedSignalCount: regressionReview.reviewedSignalCount,
+              skippedDuplicateProposalCount: regressionReview.skippedDuplicateProposalCount
             }
           })
         }
@@ -516,10 +545,22 @@ async function executeBundledHandRun(input: {
         cron: input.cron
       });
 
+      let factorySummary = "";
+      if (docsDriftReview.findingCount > 0) {
+        // 🧙🏾‍♂️ Rich Hickey: Documentation must derive from the truth.
+        // If drift is detected, synthesize the new truth.
+        const factoryResult = await runDocsFactory({
+          env: input.env,
+          cron: input.cron,
+          timestamp: input.timestamp
+        });
+        factorySummary = ` Autonomous refresh triggered: ${factoryResult.summary}`;
+      }
+
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
-        summary: docsDriftReview.summary,
+        summary: docsDriftReview.summary + factorySummary,
         metadata: {
           action: "run",
           cron: input.cron,
@@ -536,12 +577,13 @@ async function executeBundledHandRun(input: {
             outcome: "succeeded",
             timestamp: input.timestamp,
             handId: input.definition.id,
-            detail: docsDriftReview.summary,
+            detail: docsDriftReview.summary + factorySummary,
             extra: {
               cron: input.cron,
               findingCount: docsDriftReview.findingCount,
               reviewedClaimCount: docsDriftReview.reviewedClaimCount,
-              reviewedDocumentCount: docsDriftReview.reviewedDocumentCount
+              reviewedDocumentCount: docsDriftReview.reviewedDocumentCount,
+              factorySummary
             }
           })
         }
@@ -729,7 +771,66 @@ async function executeBundledHandRun(input: {
       return;
     }
 
+    if (input.definition.implementation === "structural-hand-synthesis") {
+      const evolution = await runAutonomousEvolution({
+        env: input.env,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} processed successful trajectories. PROMOTE: ${evolution.promotedCount}, DISTILL: ${evolution.distilledCount}.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          promotedCount: evolution.promotedCount,
+          distilledCount: evolution.distilledCount,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} completed with ${evolution.promotedCount} promotions and ${evolution.distilledCount} distillations.`
+          })
+        }
+      });
+      return;
+    }
+
     if (input.definition.implementation === "website-factory") {
+      const isScheduled = !input.input?.prompt;
+      
+      if (isScheduled) {
+        // 🧙🏾‍♂️ Rich Hickey: Scheduled run for a factory is a health check.
+        await repository.appendToolEvent({
+          timestamp: input.timestamp,
+          toolName: HAND_RUN_TOOL,
+          summary: `${input.definition.label} autonomous check: factory ready for synthesis. No manual prompt received; skipping deployment.`,
+          metadata: {
+            action: "run",
+            cron: input.cron,
+            handId: input.definition.id,
+            status: "succeeded",
+            audit: buildToolAuditRecord({
+              toolId: "hand-run",
+              actor: "hand-runtime",
+              scope: "hand",
+              outcome: "succeeded",
+              timestamp: input.timestamp,
+              handId: input.definition.id,
+              detail: `${input.definition.label} autonomous health check passed.`
+            })
+          }
+        });
+        return;
+      }
+
       await runWebsiteFactory(input.env, { 
         input: { 
             prompt: "A minimalist premium website", // Default
@@ -1214,6 +1315,10 @@ function toHandRunRecord(event: ToolEvent): HandRunRecord {
       typeof event.metadata?.evaluatedProposalCount === "number" ? event.metadata.evaluatedProposalCount : 0,
     awaitingApprovalCount:
       typeof event.metadata?.awaitingApprovalCount === "number" ? event.metadata.awaitingApprovalCount : 0,
+    promotedProposalCount:
+      typeof event.metadata?.promotedProposalCount === "number" ? event.metadata.promotedProposalCount : 0,
+    spawnedAgentCount:
+      typeof event.metadata?.spawnedAgentCount === "number" ? event.metadata.spawnedAgentCount : 0,
     skippedDuplicateProposalCount:
       typeof event.metadata?.skippedDuplicateProposalCount === "number"
         ? event.metadata.skippedDuplicateProposalCount
@@ -1422,7 +1527,8 @@ async function runDocsFactory(input: {
     `;
 
     // 3. Push to GitHub (Optional)
-    const repoName = "aaronclaw-docs";
+    // 🧙🏾‍♂️ Rich Hickey: Identity is sacred. The docs belong at 'docs'.
+    const repoName = "docs";
     if (githubToken) {
       try {
         try {
@@ -1463,7 +1569,7 @@ async function runDocsFactory(input: {
         {
           name: repoName,
           main: "worker.js",
-          compatibility_date: "2024-03-12"
+          compatibility_date: "2026-03-13"
         },
         workerScript
       );
@@ -1533,4 +1639,95 @@ async function runWebsiteFactory(
   console.log(`Website Factory deployment complete: ${deployment.url || `https://${name}.workers.dev`}`);
   
   // Tag the run (optional as handled by appendToolEvent in executeBundledHandRun)
+}
+
+async function triggerRecursiveEvolution(input: {
+  env: Pick<Env, "AARONDB" | "DB" | "APP_AUTH_TOKEN">;
+  timestamp: string;
+}): Promise<{ promotedCount: number; spawnedAgentCount: number }> {
+  // Query for "promoted" proposals that haven't been acted upon yet
+  // For now, we look at the proposal session directly
+  const dbs: D1Database[] = [input.env.AARONDB];
+  if (input.env.DB) dbs.push(input.env.DB);
+  const repository = new AaronDbEdgeSessionRepository(dbs, IMPROVEMENT_PROPOSAL_SESSION_ID);
+  const session = await repository.getSession();
+  const events = session?.toolEvents ?? [];
+
+  const promotedProposals: ImprovementProposalRecord[] = [];
+  const spawnedAgentKeys = new Set<string>();
+
+  for (const event of events) {
+    if (event.toolName === "improvement-candidate-review" && event.metadata?.proposals) {
+      const records = event.metadata.proposals as ImprovementProposalRecord[];
+      for (const p of records) {
+        if (p.status === "promoted") {
+          promotedProposals.push(p);
+        }
+      }
+    }
+    if (event.toolName === "hand-run" && event.metadata?.spawnedAgentKeys) {
+       (event.metadata.spawnedAgentKeys as string[]).forEach(k => spawnedAgentKeys.add(k));
+    }
+  }
+
+  const pendingSpawn = promotedProposals.filter(p => !spawnedAgentKeys.has(p.candidateKey));
+  let spawnedCount = 0;
+
+  const hub = new KnowledgeHub(dbs);
+  const globalPatterns = await hub.queryKnowledge();
+
+  for (const proposal of pendingSpawn) {
+    // 🧙🏾‍♂️ Rich Hickey: Evolution is the process of specializing from general truth.
+    // We spawn an agent with the learned bootstrap extension, augmented by the Knowledge Hub.
+    const relevantPatterns = globalPatterns
+      .filter(p => p.category === proposal.category)
+      .slice(0, 3);
+    try {
+      const spawnUrl = `https://aaronclaw.moneyacad.workers.dev/api/spawn`;
+      const response = await fetch(spawnUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${input.env.APP_AUTH_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: `evolved-${proposal.candidateKey}`,
+          description: proposal.summary,
+          bootstrapExtension: {
+             sourceProposalKey: proposal.proposalKey,
+             proposedAction: proposal.proposedAction,
+             pattern: proposal.problemStatement,
+             globalPatterns: relevantPatterns.map(p => ({
+               key: p.patternKey,
+               action: p.proposedAction,
+               benefit: p.expectedBenefit
+             }))
+          }
+        })
+      });
+
+      if (response.ok) {
+        spawnedCount += 1;
+        // Mark as spawned in the hand session (via return value and repository update)
+      }
+    } catch (e) {
+      console.error(`Recursive Evolution: Failed to spawn agent for ${proposal.candidateKey}`, e);
+    }
+  }
+
+  if (spawnedCount > 0) {
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: "hand-run",
+        summary: `Recursive Evolution spawned ${spawnedCount} improved agent(s).`,
+        metadata: {
+           spawnedAgentKeys: pendingSpawn.map(p => p.candidateKey).slice(0, spawnedCount)
+        }
+      });
+  }
+
+  return {
+    promotedCount: promotedProposals.length,
+    spawnedAgentCount: spawnedCount
+  };
 }

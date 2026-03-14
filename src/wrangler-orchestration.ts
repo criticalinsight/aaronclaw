@@ -157,7 +157,7 @@ export async function deploySimpleSite(
     {
       name: siteName,
       main: "worker.js",
-      compatibility_date: "2024-03-12"
+      compatibility_date: "2026-03-13"
     },
     workerScript
   );

@@ -12,6 +12,15 @@ export interface GithubFileChange {
   content: string;
 }
 
+export interface GithubWorkflowStatus {
+  id: number;
+  status: "queued" | "in_progress" | "completed";
+  conclusion: "success" | "failure" | "neutral" | "cancelled" | "timed_out" | "action_required" | "skipped" | null;
+  html_url: string;
+  run_number: number;
+  created_at: string;
+}
+
 export async function runGithubCoordinator(env: Pick<Env, "GEMINI_API_KEY" | "AARONDB">): Promise<JsonObject> {
   // This is the entry point from hands-runtime.ts
   // For Phase 2, we will keep it simple and just return a status for now
@@ -142,4 +151,64 @@ export async function createPullRequest(
   }
 
   return await response.json() as JsonObject;
+}
+export async function setupGithubActions(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<JsonObject> {
+  // 🧙🏾‍♂️ Phase 2: Generating CI/CD trajectories.
+  // We'll push a standard Wrangler deployment workflow.
+  const workflowContent = `name: Deploy Agent
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+
+  return await pushFilesToGithub(
+    token,
+    owner,
+    repo,
+    "main",
+    [{
+      path: ".github/workflows/deploy.yml",
+      content: workflowContent
+    }],
+    "Setup CI/CD via AaronClaw Software Factory"
+  );
+}
+
+export async function getLatestWorkflowRun(
+  token: string,
+  owner: string,
+  repo: string
+): Promise<GithubWorkflowStatus | null> {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/runs?per_page=1`, {
+    headers: {
+      Authorization: `token ${token}`,
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "AaronClaw-Software-Factory"
+    }
+  });
+
+  if (!response.ok) {
+    console.error(`GitHub Workflow Run Fetch Failed: ${response.statusText}`);
+    return null;
+  }
+
+  const data = await response.json() as { workflow_runs: GithubWorkflowStatus[] };
+  return data.workflow_runs[0] || null;
 }
