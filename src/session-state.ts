@@ -165,47 +165,37 @@ class AaronDbCompatMemoryIndex {
 
   getEntityLastTx(entity: string, asOf?: number): number {
     const entityFacts = this.eavt.get(entity);
-
-    if (!entityFacts) {
-      return 0;
-    }
+    if (!entityFacts) return 0;
 
     let latestTx = 0;
-
     for (const facts of entityFacts.values()) {
       const fact = this.findLatestFact(facts, asOf);
-
       if (fact) {
         latestTx = Math.max(latestTx, fact.tx);
       }
     }
-
     return latestTx;
   }
 
   findEntities(attribute: AaronDbAttribute, value: JsonValue, asOf?: number): string[] {
     const facts = this.avet.get(attribute)?.get(serializeValueKey(value)) ?? [];
     const entities = new Set<string>();
-
     for (const fact of facts) {
       if (this.isVisible(fact, asOf)) {
         entities.add(fact.entity);
       }
     }
-
     return [...entities];
   }
 
   findEntitiesWithAttribute(attribute: AaronDbAttribute, asOf?: number): string[] {
     const facts = this.aevt.get(attribute) ?? [];
     const entities = new Set<string>();
-
     for (const fact of facts) {
       if (this.isVisible(fact, asOf)) {
         entities.add(fact.entity);
       }
     }
-
     return [...entities];
   }
 
@@ -234,20 +224,14 @@ class AaronDbCompatMemoryIndex {
     facts: AaronDbFactRecord[] | undefined,
     asOf?: number
   ): AaronDbFactRecord | undefined {
-    if (!facts || facts.length === 0) {
-      return undefined;
-    }
-
-    if (asOf === undefined) {
-      return facts[facts.length - 1];
-    }
+    if (!facts || facts.length === 0) return undefined;
+    if (asOf === undefined) return facts[facts.length - 1];
 
     for (let index = facts.length - 1; index >= 0; index -= 1) {
       if (facts[index].tx <= asOf) {
         return facts[index];
       }
     }
-
     return undefined;
   }
 
@@ -276,6 +260,8 @@ const FACT_INSERT_SQL = `
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 `;
 
+// --- Pure Data Transformation Functions ---
+
 function tokenize(content: string): string[] {
   const terms = content
     .toLowerCase()
@@ -284,29 +270,7 @@ function tokenize(content: string): string[] {
     .filter((token) => token.length >= 2)
     .map((token) => token.replace(/(ing|ed|es|s)$/u, ""))
     .filter((token) => token.length >= 2);
-
   return [...new Set(terms)];
-}
-
-function createFact(
-  sessionId: string,
-  entity: string,
-  attribute: AaronDbAttribute,
-  value: JsonValue,
-  tx: number,
-  txIndex: number,
-  occurredAt: string
-): AaronDbFactRecord {
-  return {
-    sessionId,
-    entity,
-    attribute,
-    value,
-    tx,
-    txIndex,
-    occurredAt,
-    operation: "assert"
-  };
 }
 
 function compareFacts(left: AaronDbFactRecord, right: AaronDbFactRecord): number {
@@ -337,12 +301,142 @@ function previewForEvent(event: SessionEvent): string {
     : `${event.toolName}: ${event.summary}`;
 }
 
+function parseFactRow(row: AaronDbFactRow): AaronDbFactRecord {
+  return {
+    sessionId: row.session_id,
+    entity: row.entity,
+    attribute: row.attribute,
+    value: JSON.parse(row.value_json),
+    tx: row.tx,
+    txIndex: row.tx_index,
+    occurredAt: row.occurred_at,
+    operation: row.operation,
+  };
+}
+
+function mergeAndSortFactRows(results: D1Result<AaronDbFactRow>[]): AaronDbFactRecord[] {
+  const allFacts: AaronDbFactRecord[] = [];
+  const seenTx = new Set<string>();
+
+  for (const result of results) {
+    for (const row of result.results ?? []) {
+      const txKey = `${row.tx}:${row.tx_index}`;
+      if (!seenTx.has(txKey)) {
+        seenTx.add(txKey);
+        allFacts.push(parseFactRow(row));
+      }
+    }
+  }
+  return allFacts.sort(compareFacts);
+}
+
+function createSessionFacts(sessionId: string, timestamp: string, tx: number): AaronDbFactRecord[] {
+  const factData = [
+    { entity: sessionId, attribute: "type", value: "session" },
+    { entity: sessionId, attribute: "createdAt", value: timestamp },
+    { entity: sessionId, attribute: "lastActiveAt", value: timestamp },
+  ];
+  return factData.map((data, index) => ({
+    sessionId,
+    entity: data.entity,
+    attribute: data.attribute as AaronDbAttribute,
+    value: data.value as JsonValue,
+    tx,
+    txIndex: index,
+    occurredAt: timestamp,
+    operation: "assert",
+  }));
+}
+
+function createMessageFacts(
+  sessionId: string,
+  tx: number,
+  input: Parameters<SessionStateRepository["appendMessage"]>[0]
+): AaronDbFactRecord[] {
+  const entity = `${sessionId}:message:${tx}`;
+  const { timestamp, role, content, metadata, toolCalls, toolCallId } = input;
+
+  const factData: { entity: string; attribute: AaronDbAttribute; value: JsonValue }[] = [
+    { entity: sessionId, attribute: "lastActiveAt", value: timestamp },
+    { entity, attribute: "type", value: "message" },
+    { entity, attribute: "session", value: sessionId },
+    { entity, attribute: "createdAt", value: timestamp },
+    { entity, attribute: "role", value: role },
+    { entity, attribute: "content", value: content },
+  ];
+
+  if (toolCalls && toolCalls.length > 0) {
+    factData.push({ entity, attribute: "toolCalls", value: toolCalls });
+  }
+  if (toolCallId) {
+    factData.push({ entity, attribute: "toolCallId", value: toolCallId });
+  }
+  if (metadata && Object.keys(metadata).length > 0) {
+    factData.push({ entity, attribute: "metadata", value: metadata });
+  }
+
+  const memoryTerms = tokenize(content).map((term) => ({
+    entity,
+    attribute: "memoryTerm" as AaronDbAttribute,
+    value: term as JsonValue,
+  }));
+
+  return [...factData, ...memoryTerms].map((data, index) => ({
+    sessionId,
+    entity: data.entity,
+    attribute: data.attribute,
+    value: data.value,
+    tx,
+    txIndex: index,
+    occurredAt: timestamp,
+    operation: "assert",
+  }));
+}
+
+function createToolEventFacts(
+  sessionId: string,
+  tx: number,
+  input: Parameters<SessionStateRepository["appendToolEvent"]>[0]
+): AaronDbFactRecord[] {
+  const entity = `${sessionId}:tool-event:${tx}`;
+  const { timestamp, toolName, summary, metadata } = input;
+
+  const factData: { entity: string; attribute: AaronDbAttribute; value: JsonValue }[] = [
+    { entity: sessionId, attribute: "lastActiveAt", value: timestamp },
+    { entity, attribute: "type", value: "tool-event" },
+    { entity, attribute: "session", value: sessionId },
+    { entity, attribute: "createdAt", value: timestamp },
+    { entity, attribute: "toolName", value: toolName },
+    { entity, attribute: "summary", value: summary },
+  ];
+
+  if (metadata && Object.keys(metadata).length > 0) {
+    factData.push({ entity, attribute: "metadata", value: metadata });
+  }
+
+  const memoryTerms = tokenize(`${toolName} ${summary}`).map((term) => ({
+    entity,
+    attribute: "memoryTerm" as AaronDbAttribute,
+    value: term as JsonValue,
+  }));
+
+  return [...factData, ...memoryTerms].map((data, index) => ({
+    sessionId,
+    entity: data.entity,
+    attribute: data.attribute,
+    value: data.value,
+    tx,
+    txIndex: index,
+    occurredAt: timestamp,
+    operation: "assert",
+  }));
+}
+
 export class AaronDbEdgeSessionRepository implements SessionStateRepository {
   private readonly memoryIndex = new AaronDbCompatMemoryIndex();
   private hydrated = false;
   private hydratePromise: Promise<void> | null = null;
   private currentProjection: SessionRecord | null = null;
-
   private readonly databases: D1Database[];
 
   constructor(
@@ -353,252 +447,48 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
   }
 
   async createSession(timestamp: string): Promise<SessionRecord> {
-    await this.ensureHydrated();
+    await this._ensureHydrated();
+    if (this.currentProjection) return this.currentProjection;
 
-    if (this.currentProjection) {
-      return this.currentProjection;
-    }
-
-    const tx = this.nextTx();
-    const facts = [
-      createFact(this.sessionId, this.sessionId, "type", "session", tx, 0, timestamp),
-      createFact(
-        this.sessionId,
-        this.sessionId,
-        "createdAt",
-        timestamp,
-        tx,
-        1,
-        timestamp
-      ),
-      createFact(
-        this.sessionId,
-        this.sessionId,
-        "lastActiveAt",
-        timestamp,
-        tx,
-        2,
-        timestamp
-      )
-    ];
-
-    await this.appendFacts(facts);
-    return this.requireCurrentProjection();
+    const tx = this._nextTx();
+    const facts = createSessionFacts(this.sessionId, timestamp, tx);
+    await this._appendAndApplyFacts(facts);
+    return this._getOrThrowCurrentProjection();
   }
 
   async getSession(options?: { asOf?: number }): Promise<SessionRecord | null> {
-    await this.ensureHydrated();
-
-    if (options?.asOf !== undefined) {
-      return this.project(options.asOf);
-    }
-
-    return this.currentProjection;
+    await this._ensureHydrated();
+    return options?.asOf !== undefined ? this._project(options.asOf) : this.currentProjection;
   }
 
-  async appendMessage(input: {
-    timestamp: string;
-    role: MessageRole;
-    content: string;
-    metadata?: JsonObject;
-    toolCalls?: any[];
-    toolCallId?: string;
-  }): Promise<SessionRecord> {
-    await this.ensureHydrated();
-    this.assertInitialized();
+  async appendMessage(input: Parameters<SessionStateRepository["appendMessage"]>[0]): Promise<SessionRecord> {
+    await this._ensureHydrated();
+    this._assertInitialized();
 
-    const tx = this.nextTx();
-    const entity = `${this.sessionId}:message:${tx}`;
-    const facts: AaronDbFactRecord[] = [
-      createFact(
-        this.sessionId,
-        this.sessionId,
-        "lastActiveAt",
-        input.timestamp,
-        tx,
-        0,
-        input.timestamp
-      ),
-      createFact(this.sessionId, entity, "type", "message", tx, 1, input.timestamp),
-      createFact(this.sessionId, entity, "session", this.sessionId, tx, 2, input.timestamp),
-      createFact(
-        this.sessionId,
-        entity,
-        "createdAt",
-        input.timestamp,
-        tx,
-        3,
-        input.timestamp
-      ),
-      createFact(this.sessionId, entity, "role", input.role, tx, 4, input.timestamp),
-      createFact(
-        this.sessionId,
-        entity,
-        "content",
-        input.content,
-        tx,
-        5,
-        input.timestamp
-      )
-    ];
-
-    let txIndex = 6;
-
-    if (input.toolCalls && input.toolCalls.length > 0) {
-      facts.push(
-        createFact(this.sessionId, entity, "toolCalls", input.toolCalls, tx, txIndex, input.timestamp)
-      );
-      txIndex += 1;
-    }
-
-    if (input.toolCallId) {
-      facts.push(
-        createFact(this.sessionId, entity, "toolCallId", input.toolCallId, tx, txIndex, input.timestamp)
-      );
-      txIndex += 1;
-    }
-
-    if (input.metadata && Object.keys(input.metadata).length > 0) {
-      facts.push(
-        createFact(
-          this.sessionId,
-          entity,
-          "metadata",
-          input.metadata,
-          tx,
-          txIndex,
-          input.timestamp
-        )
-      );
-      txIndex += 1;
-    }
-
-    for (const term of tokenize(input.content)) {
-      facts.push(
-        createFact(
-          this.sessionId,
-          entity,
-          "memoryTerm",
-          term,
-          tx,
-          txIndex,
-          input.timestamp
-        )
-      );
-      txIndex += 1;
-    }
-
-    await this.appendFacts(facts);
-    return this.requireCurrentProjection();
+    const tx = this._nextTx();
+    const facts = createMessageFacts(this.sessionId, tx, input);
+    await this._appendAndApplyFacts(facts);
+    return this._getOrThrowCurrentProjection();
   }
 
-  async appendToolEvent(input: {
-    timestamp: string;
-    toolName: string;
-    summary: string;
-    metadata?: JsonObject;
-  }): Promise<SessionRecord> {
-    await this.ensureHydrated();
-    this.assertInitialized();
+  async appendToolEvent(input: Parameters<SessionStateRepository["appendToolEvent"]>[0]): Promise<SessionRecord> {
+    await this._ensureHydrated();
+    this._assertInitialized();
 
-    const tx = this.nextTx();
-    const entity = `${this.sessionId}:tool:${tx}`;
-    const facts: AaronDbFactRecord[] = [
-      createFact(
-        this.sessionId,
-        this.sessionId,
-        "lastActiveAt",
-        input.timestamp,
-        tx,
-        0,
-        input.timestamp
-      ),
-      createFact(this.sessionId, entity, "type", "tool-event", tx, 1, input.timestamp),
-      createFact(this.sessionId, entity, "session", this.sessionId, tx, 2, input.timestamp),
-      createFact(
-        this.sessionId,
-        entity,
-        "createdAt",
-        input.timestamp,
-        tx,
-        3,
-        input.timestamp
-      ),
-      createFact(
-        this.sessionId,
-        entity,
-        "toolName",
-        input.toolName,
-        tx,
-        4,
-        input.timestamp
-      ),
-      createFact(
-        this.sessionId,
-        entity,
-        "summary",
-        input.summary,
-        tx,
-        5,
-        input.timestamp
-      )
-    ];
-
-    let txIndex = 6;
-
-    if (input.metadata && Object.keys(input.metadata).length > 0) {
-      facts.push(
-        createFact(
-          this.sessionId,
-          entity,
-          "metadata",
-          input.metadata,
-          tx,
-          txIndex,
-          input.timestamp
-        )
-      );
-      txIndex += 1;
-    }
-
-    for (const term of tokenize(`${input.toolName} ${input.summary}`)) {
-      facts.push(
-        createFact(
-          this.sessionId,
-          entity,
-          "memoryTerm",
-          term,
-          tx,
-          txIndex,
-          input.timestamp
-        )
-      );
-      txIndex += 1;
-    }
-
-    await this.appendFacts(facts);
-    return this.requireCurrentProjection();
+    const tx = this._nextTx();
+    const facts = createToolEventFacts(this.sessionId, tx, input);
+    await this._appendAndApplyFacts(facts);
+    return this._getOrThrowCurrentProjection();
   }
 
-  async recall(input: {
-    query: string;
-    limit?: number;
-    asOf?: number;
-  }): Promise<RecallMatch[]> {
-    await this.ensureHydrated();
-
-    if (this.memoryIndex.getLatestValue(this.sessionId, "type", input.asOf) !== "session") {
-      return [];
-    }
+  async recall(input: { query: string; limit?: number; asOf?: number }): Promise<RecallMatch[]> {
+    await this._ensureHydrated();
+    if (this.memoryIndex.getLatestValue(this.sessionId, "type", input.asOf) !== "session") return [];
 
     const queryTerms = tokenize(input.query);
-
-    if (queryTerms.length === 0) {
-      return [];
-    }
+    if (queryTerms.length === 0) return [];
 
     const candidateEventIds = new Set<string>();
-
     for (const term of queryTerms) {
       for (const eventId of this.memoryIndex.findEntities("memoryTerm", term, input.asOf)) {
         candidateEventIds.add(eventId);
@@ -606,11 +496,10 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     }
 
     return [...candidateEventIds]
-      .map((eventId) => this.projectEvent(eventId, input.asOf))
+      .map((eventId) => this._projectEvent(eventId, input.asOf))
       .filter((event): event is SessionEvent => event !== null)
       .map((event) => {
         const matchedTerms = event.recallTerms.filter((term) => queryTerms.includes(term));
-
         return matchedTerms.length === 0
           ? null
           : {
@@ -619,119 +508,75 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
               tx: event.tx,
               matchedTerms,
               score: matchedTerms.length / queryTerms.length,
-              preview: previewForEvent(event)
-            } satisfies RecallMatch;
+              preview: previewForEvent(event),
+            };
       })
       .filter((match): match is RecallMatch => match !== null)
       .sort((left, right) => right.score - left.score || right.tx - left.tx)
       .slice(0, input.limit ?? 5);
   }
 
-  private async ensureHydrated(): Promise<void> {
-    if (this.hydrated) {
-      return;
-    }
-
-    if (!this.hydratePromise) {
-      this.hydratePromise = this.hydrate();
-    }
-
-    await this.hydratePromise;
+  async syncFacts(facts: AaronDbFactRecord[]): Promise<void> {
+    await this._appendAndApplyFacts(facts);
   }
 
-  private async hydrate(): Promise<void> {
-    const allFacts: AaronDbFactRecord[] = [];
-    const seenTx = new Set<string>();
+  private _ensureHydrated(): Promise<void> {
+    if (this.hydrated) return Promise.resolve();
+    if (!this.hydratePromise) this.hydratePromise = this._hydrate();
+    return this.hydratePromise;
+  }
 
+  private async _hydrate(): Promise<void> {
     const results = await Promise.all(
-      this.databases.map((db) =>
-        db
-          .prepare(FACT_SELECT_SQL)
-          .bind(this.sessionId)
-          .all<AaronDbFactRow>()
-      )
+      this.databases.map((db) => db.prepare(FACT_SELECT_SQL).bind(this.sessionId).all<AaronDbFactRow>())
     );
-
-    for (const result of results) {
-      for (const row of result.results ?? []) {
-        const txKey = `${row.tx}:${row.tx_index}`;
-        if (seenTx.has(txKey)) {
-          continue;
-        }
-
-        seenTx.add(txKey);
-        allFacts.push({
-          sessionId: row.session_id,
-          entity: row.entity,
-          attribute: row.attribute,
-          value: JSON.parse(row.value_json) as JsonValue,
-          tx: row.tx,
-          txIndex: row.tx_index,
-          occurredAt: row.occurred_at,
-          operation: row.operation
-        });
-      }
-    }
-
-    // Sort facts by tx and txIndex to ensure correct replay order
-    allFacts.sort((a, b) => a.tx - b.tx || a.txIndex - b.txIndex);
-
-    this.memoryIndex.reset(allFacts);
-    this.currentProjection = this.project();
+    const sortedFacts = mergeAndSortFactRows(results);
+    this.memoryIndex.reset(sortedFacts);
+    this.currentProjection = this._project();
     this.hydrated = true;
   }
 
-  async syncFacts(facts: AaronDbFactRecord[]): Promise<void> {
-    await this.appendFacts(facts);
+  private async _appendAndApplyFacts(facts: AaronDbFactRecord[]): Promise<void> {
+    await this._persistFacts(facts);
+    this._applyFactsToMemory(facts);
   }
 
-  private async appendFacts(facts: AaronDbFactRecord[]): Promise<void> {
+  private async _persistFacts(facts: AaronDbFactRecord[]): Promise<void> {
     const primaryDb = this.databases[0];
-    if (!primaryDb) {
-      throw new Error("No primary database available for persistence");
-    }
+    if (!primaryDb) throw new Error("No primary database available for persistence");
 
-    await primaryDb.batch(
-      facts.map((fact) =>
-        primaryDb
-          .prepare(FACT_INSERT_SQL)
-          .bind(
-            fact.sessionId,
-            fact.entity,
-            fact.attribute,
-            JSON.stringify(fact.value),
-            fact.tx,
-            fact.txIndex,
-            fact.occurredAt,
-            fact.operation
-          )
-      )
+    const statements = facts.map((fact) =>
+      primaryDb
+        .prepare(FACT_INSERT_SQL)
+        .bind(
+          fact.sessionId,
+          fact.entity,
+          fact.attribute,
+          JSON.stringify(fact.value),
+          fact.tx,
+          fact.txIndex,
+          fact.occurredAt,
+          fact.operation
+        )
     );
-
-    this.memoryIndex.appendMany(facts);
-    this.currentProjection = this.project();
+    await primaryDb.batch(statements);
   }
 
-  private project(asOf?: number): SessionRecord | null {
-    if (this.memoryIndex.getLatestValue(this.sessionId, "type", asOf) !== "session") {
-      return null;
-    }
+  private _applyFactsToMemory(facts: AaronDbFactRecord[]): void {
+    this.memoryIndex.appendMany(facts);
+    this.currentProjection = this._project();
+  }
+
+  private _project(asOf?: number): SessionRecord | null {
+    if (this.memoryIndex.getLatestValue(this.sessionId, "type", asOf) !== "session") return null;
 
     const createdAt = asString(this.memoryIndex.getLatestValue(this.sessionId, "createdAt", asOf)) ?? "";
-    const lastActiveAt =
-      asString(this.memoryIndex.getLatestValue(this.sessionId, "lastActiveAt", asOf)) ?? createdAt;
+    const lastActiveAt = asString(this.memoryIndex.getLatestValue(this.sessionId, "lastActiveAt", asOf)) ?? createdAt;
     const events = this.memoryIndex
       .findEntities("session", this.sessionId, asOf)
-      .map((entity) => this.projectEvent(entity, asOf))
+      .map((entity) => this._projectEvent(entity, asOf))
       .filter((event): event is SessionEvent => event !== null)
       .sort((left, right) => left.tx - right.tx);
-
-    const messages = events.filter(
-      (event): event is MessageEvent => event.kind === "message"
-    );
-    const toolEvents = events.filter(
-      (event): event is ToolEvent => event.kind === "tool-event"
-    );
 
     return {
       id: this.sessionId,
@@ -741,87 +586,80 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
       persistence: "aarondb-edge",
       memorySource: "aarondb-edge",
       events,
-      messages,
-      toolEvents,
-      recallableMemoryCount: this.memoryIndex.findEntitiesWithAttribute("memoryTerm", asOf).length
+      messages: events.filter((e): e is MessageEvent => e.kind === "message"),
+      toolEvents: events.filter((e): e is ToolEvent => e.kind === "tool-event"),
+      recallableMemoryCount: this.memoryIndex.findEntitiesWithAttribute("memoryTerm", asOf).length,
     };
   }
 
-  private projectEvent(entity: string, asOf?: number): SessionEvent | null {
-    const kind = this.memoryIndex.getLatestValue(entity, "type", asOf);
-    const createdAt = asString(this.memoryIndex.getLatestValue(entity, "createdAt", asOf));
-    const metadata = asJsonObject(this.memoryIndex.getLatestValue(entity, "metadata", asOf));
-    const recallTerms = [
-      ...new Set(
-        this.memoryIndex
-          .getAllValues(entity, "memoryTerm", asOf)
-          .filter((value): value is string => typeof value === "string")
-      )
-    ].sort();
-    const tx = this.memoryIndex.getEntityLastTx(entity, asOf);
+  private readonly eventProjectors: Record<string, (e: string, a?: number) => SessionEvent | null> = {
+    message: (e, a) => this._projectMessageEvent(e, a),
+    "tool-event": (e, a) => this._projectToolEvent(e, a),
+  };
 
-    if (kind === "message") {
-      const role = asMessageRole(this.memoryIndex.getLatestValue(entity, "role", asOf));
-      const content = asString(this.memoryIndex.getLatestValue(entity, "content", asOf));
-      const toolCalls = this.memoryIndex.getLatestValue(entity, "toolCalls", asOf) as WorkersAiMessage["tool_calls"] | undefined;
-      const toolCallId = asString(this.memoryIndex.getLatestValue(entity, "toolCallId", asOf));
-
-      if (createdAt && role && (content !== undefined || toolCalls !== undefined)) {
-        return {
-          id: entity,
-          kind,
-          createdAt,
-          tx,
-          role,
-          content: content ?? "",
-          metadata,
-          recallTerms,
-          toolCalls,
-          toolCallId
-        };
-      }
-
-      return null;
-    }
-
-    if (kind === "tool-event") {
-      const toolName = asString(this.memoryIndex.getLatestValue(entity, "toolName", asOf));
-      const summary = asString(this.memoryIndex.getLatestValue(entity, "summary", asOf));
-
-      if (createdAt && toolName && summary) {
-        return {
-          id: entity,
-          kind,
-          createdAt,
-          tx,
-          toolName,
-          summary,
-          metadata,
-          recallTerms
-        };
-      }
-    }
-
-    return null;
+  private _projectEvent(entity: string, asOf?: number): SessionEvent | null {
+    const kind = this.memoryIndex.getLatestValue(entity, "type", asOf) as string;
+    const projector = this.eventProjectors[kind];
+    return projector ? projector(entity, asOf) : null;
   }
 
-  private nextTx(): number {
+  private _projectBaseEvent(entity: string, asOf?: number): Omit<BaseSessionEvent, "kind"> | null {
+    const createdAt = asString(this.memoryIndex.getLatestValue(entity, "createdAt", asOf));
+    if (!createdAt) return null;
+
+    return {
+      id: entity,
+      createdAt,
+      tx: this.memoryIndex.getEntityLastTx(entity, asOf),
+      metadata: asJsonObject(this.memoryIndex.getLatestValue(entity, "metadata", asOf)),
+      recallTerms: [
+        ...new Set(
+          this.memoryIndex
+            .getAllValues(entity, "memoryTerm", asOf)
+            .filter((v): v is string => typeof v === "string")
+        ),
+      ].sort(),
+    };
+  }
+
+  private _projectMessageEvent(entity: string, asOf?: number): MessageEvent | null {
+    const base = this._projectBaseEvent(entity, asOf);
+    const role = asMessageRole(this.memoryIndex.getLatestValue(entity, "role", asOf));
+    const content = asString(this.memoryIndex.getLatestValue(entity, "content", asOf));
+    const toolCalls = this.memoryIndex.getLatestValue(entity, "toolCalls", asOf) as any[] | undefined;
+
+    if (!base || !role || (content === undefined && toolCalls === undefined)) return null;
+
+    return {
+      ...base,
+      kind: "message",
+      role,
+      content: content ?? "",
+      toolCalls,
+      toolCallId: asString(this.memoryIndex.getLatestValue(entity, "toolCallId", asOf)),
+    };
+  }
+
+  private _projectToolEvent(entity: string, asOf?: number): ToolEvent | null {
+    const base = this._projectBaseEvent(entity, asOf);
+    const toolName = asString(this.memoryIndex.getLatestValue(entity, "toolName", asOf));
+    const summary = asString(this.memoryIndex.getLatestValue(entity, "summary", asOf));
+
+    if (!base || !toolName || !summary) return null;
+
+    return { ...base, kind: "tool-event", toolName, summary };
+  }
+
+  private _nextTx(): number {
     return this.memoryIndex.getLatestTx() + 1;
   }
 
-  private requireCurrentProjection(): SessionRecord {
-    const session = this.currentProjection;
-
-    if (!session) {
-      throw new Error("session not initialized");
-    }
-
-    return session;
+  private _getOrThrowCurrentProjection(): SessionRecord {
+    if (!this.currentProjection) throw new Error("Session not initialized");
+    return this.currentProjection;
   }
 
-  private assertInitialized(): void {
-    if (!this.currentProjection) {
-      throw new Error("session not initialized");
-    }
+  private _assertInitialized(): void {
+    if (!this.currentProjection) throw new Error("Session not initialized");
   }
 }
