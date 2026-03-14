@@ -5,7 +5,7 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 export type JsonObject = Record<string, JsonValue>;
 
-export type MessageRole = "user" | "assistant";
+export type MessageRole = "user" | "assistant" | "tool";
 export type SessionEventKind = "message" | "tool-event";
 type AaronDbAttribute =
   | "type"
@@ -17,7 +17,16 @@ type AaronDbAttribute =
   | "toolName"
   | "summary"
   | "metadata"
-  | "memoryTerm";
+  | "memoryTerm"
+  | "toolCalls"
+  | "toolCallId"
+  // Managed Project Attributes
+  | "repoUrl"
+  | "repoBranch"
+  | "optimizationTarget"
+  // Pulse Telemetry Attributes
+  | "metricKind"
+  | "metricValue";
 
 export interface AaronDbFactRecord {
   sessionId: string;
@@ -54,6 +63,8 @@ export interface MessageEvent extends BaseSessionEvent {
   kind: "message";
   role: MessageRole;
   content: string;
+  toolCalls?: any[];
+  toolCallId?: string;
 }
 
 export interface ToolEvent extends BaseSessionEvent {
@@ -94,6 +105,8 @@ export interface SessionStateRepository {
     role: MessageRole;
     content: string;
     metadata?: JsonObject;
+    toolCalls?: any[];
+    toolCallId?: string;
   }): Promise<SessionRecord>;
   appendToolEvent(input: {
     timestamp: string;
@@ -309,7 +322,7 @@ function asString(value: JsonValue | undefined): string | undefined {
 }
 
 function asMessageRole(value: JsonValue | undefined): MessageRole | undefined {
-  return value === "user" || value === "assistant" ? value : undefined;
+  return value === "user" || value === "assistant" || value === "tool" ? value : undefined;
 }
 
 function asJsonObject(value: JsonValue | undefined): JsonObject | null {
@@ -388,6 +401,8 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     role: MessageRole;
     content: string;
     metadata?: JsonObject;
+    toolCalls?: any[];
+    toolCallId?: string;
   }): Promise<SessionRecord> {
     await this.ensureHydrated();
     this.assertInitialized();
@@ -428,6 +443,20 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     ];
 
     let txIndex = 6;
+
+    if (input.toolCalls && input.toolCalls.length > 0) {
+      facts.push(
+        createFact(this.sessionId, entity, "toolCalls", input.toolCalls, tx, txIndex, input.timestamp)
+      );
+      txIndex += 1;
+    }
+
+    if (input.toolCallId) {
+      facts.push(
+        createFact(this.sessionId, entity, "toolCallId", input.toolCallId, tx, txIndex, input.timestamp)
+      );
+      txIndex += 1;
+    }
 
     if (input.metadata && Object.keys(input.metadata).length > 0) {
       facts.push(
@@ -734,17 +763,21 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
     if (kind === "message") {
       const role = asMessageRole(this.memoryIndex.getLatestValue(entity, "role", asOf));
       const content = asString(this.memoryIndex.getLatestValue(entity, "content", asOf));
+      const toolCalls = this.memoryIndex.getLatestValue(entity, "toolCalls", asOf) as WorkersAiMessage["tool_calls"] | undefined;
+      const toolCallId = asString(this.memoryIndex.getLatestValue(entity, "toolCallId", asOf));
 
-      if (createdAt && role && content) {
+      if (createdAt && role && (content !== undefined || toolCalls !== undefined)) {
         return {
           id: entity,
           kind,
           createdAt,
           tx,
           role,
-          content,
+          content: content ?? "",
           metadata,
-          recallTerms
+          recallTerms,
+          toolCalls,
+          toolCallId
         };
       }
 

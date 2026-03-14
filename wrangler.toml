@@ -2,6 +2,10 @@ name = "aaronclaw-tmp"
 main = "src/index.ts"
 compatibility_date = "2026-03-13"
 
+[assets]
+directory = "public"
+binding = "ASSETS"
+
 [[d1_databases]]
 binding = "AARONDB"
 database_name = "aaronclaw-aarondb"

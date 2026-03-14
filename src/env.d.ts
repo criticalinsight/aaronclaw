@@ -1,6 +1,15 @@
 interface WorkersAiMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_calls?: {
+    id: string;
+    type: "function";
+    function: {
+      name: string;
+      arguments: string;
+    };
+  }[];
+  tool_call_id?: string;
 }
 
 interface WorkersAiBinding {
@@ -8,6 +17,14 @@ interface WorkersAiBinding {
     model: string,
     input: {
       messages: WorkersAiMessage[];
+      tools?: {
+        type: "function";
+        function: {
+          name: string;
+          description: string;
+          parameters: any;
+        };
+      }[];
       max_tokens?: number;
       temperature?: number;
     }

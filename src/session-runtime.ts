@@ -10,7 +10,7 @@ import {
   mountAaronDbEdgeSessionRuntime
 } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
-import { listBundledHands } from "./hands-runtime";
+import { listBundledHands, triggerBundledHandRunManual } from "./hands-runtime";
 import { orchestrateCloudflareDeployment as wranglerOrchestrationImpl } from "./wrangler-orchestration";
 import { queryKnowledgeVault } from "./knowledge-vault";
 import { resolveModelSelection, type ResolvedModelSelection } from "./model-registry";
@@ -182,7 +182,7 @@ export class SessionRuntime {
       try {
         const toolAuditTrail: JsonObject[] = [];
         const skillMetadata = skill ? buildSkillRuntimeMetadata(skill) : null;
-        const userSession = await repository.appendMessage({
+        let userSession = await repository.appendMessage({
           timestamp: new Date().toISOString(),
           role: "user",
           content,
@@ -304,7 +304,7 @@ export class SessionRuntime {
                 provider: "gemini"
               })
             : null;
-        const assistant = await generateAssistantReply({
+        let assistant = await generateAssistantReply({
           env: this.env,
           session: userSession,
           sessionId,
@@ -317,6 +317,88 @@ export class SessionRuntime {
             ? [...buildSkillPromptAdditions(skill), ...skillDiagnosticContext.promptAdditions]
             : undefined
         });
+
+        let loopCount = 0;
+        const maxLoops = 3;
+
+        while (loopCount < maxLoops && assistant.tool_calls && assistant.tool_calls.length > 0) {
+          // 1. Record assistant message with tool calls
+          userSession = await repository.appendMessage({
+            timestamp: new Date().toISOString(),
+            role: "assistant",
+            content: assistant.content,
+            toolCalls: assistant.tool_calls,
+            metadata: {
+              model: assistant.model ?? "fallback",
+              source: assistant.source,
+              toolAuditTrail,
+              ...(skillMetadata ?? {})
+            }
+          });
+
+          // 2. Execute each tool call
+          for (const toolCall of assistant.tool_calls) {
+            if (toolCall.function.name === "hand-run-manual") {
+              const args = JSON.parse(toolCall.function.arguments);
+              const handId = args.handId;
+              const handInput = args.input;
+
+              console.log(`agentic-loop: executing hand ${handId}`, { sessionId, handInput });
+
+              const handResult = await triggerBundledHandRunManual({
+                env: this.env,
+                handId,
+                input: handInput
+              });
+
+              // 3. Append tool result
+              userSession = await repository.appendMessage({
+                timestamp: new Date().toISOString(),
+                role: "tool",
+                content: JSON.stringify(handResult ?? { error: "hand-not-found" }),
+                toolCallId: toolCall.id,
+                metadata: {
+                  toolName: "hand-run-manual",
+                  handId,
+                  outcome: handResult ? "triggered" : "failed"
+                }
+              });
+
+              toolAuditTrail.push(
+                buildToolAuditRecord({
+                  toolId: "hand-run-manual",
+                  actor: "session-runtime",
+                  scope: "session",
+                  outcome: handResult ? "succeeded" : "failed",
+                  timestamp: new Date().toISOString(),
+                  sessionId,
+                  skillId: skill?.id,
+                  detail: handResult
+                    ? `Successfully triggered hand ${handId} via agentic loop.`
+                    : `Failed to trigger hand ${handId}.`
+                })
+              );
+            }
+          }
+
+          // 4. Generate next response
+          assistant = await generateAssistantReply({
+            env: this.env,
+            session: userSession,
+            sessionId,
+            userMessage: content,
+            recallMatches,
+            knowledgeVaultMatches: knowledgeVault.matches,
+            primaryRoute: buildAssistantRoute(modelSelection.activeModel, geminiApiKey),
+            fallbackRoute: buildFallbackAssistantRoute(modelSelection, geminiApiKey),
+            promptAdditions: skill
+              ? [...buildSkillPromptAdditions(skill), ...skillDiagnosticContext.promptAdditions]
+              : undefined
+          });
+
+          loopCount++;
+        }
+
         const session = await repository.appendMessage({
           timestamp: new Date().toISOString(),
           role: "assistant",
@@ -334,14 +416,11 @@ export class SessionRuntime {
             ...(modelSelection.selectionFallbackReason
               ? { modelSelectionFallbackReason: modelSelection.selectionFallbackReason }
               : {}),
-            ...(assistant.fallbackReason
-              ? { fallbackReason: assistant.fallbackReason }
-              : {}),
-            ...(assistant.fallbackDetail
-              ? { fallbackDetail: assistant.fallbackDetail }
-              : {}),
+            ...(assistant.fallbackReason ? { fallbackReason: assistant.fallbackReason } : {}),
+            ...(assistant.fallbackDetail ? { fallbackDetail: assistant.fallbackDetail } : {}),
             toolAuditTrail,
-            ...(skillMetadata ?? {})
+            ...(skillMetadata ?? {}),
+            agenticLoopCount: loopCount
           }
         });
 

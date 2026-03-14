@@ -58,10 +58,10 @@ export interface DocsDriftReviewResult {
 export const defaultDocsContract: DocsContract = {
   documentedHands: {
     source: {
-      path: "docs/setup.md",
+      path: "public/docs/setup.md",
       section: "What to expect locally",
       excerpt:
-        "The bundled hands currently shipped are `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`, `regression-watch`, `provider-health-watchdog`, `docs-drift`, `ttl-garbage-collector`, `orphan-fact-cleanup`, `vector-index-reconciler`, `daily-briefing-generator`, `github-coordinator`, `docs-factory`, `error-cluster-detect`, `credential-leak-watchdog`, `usage-spike-analyzer`, `latent-reflection-miner`, `latency-anomaly-detector`, `tool-performance-baseline`, `stale-session-archiver`, `active-session-prewarmer`, `durable-object-storage-watch`, `dependency-drifter`, `secret-rotation-check`, `audit-log-compactor`, `schema-integrity-checker`, `token-budget-enforcer`, `prompt-injection-watchdog`, `reproducibility-guard`, `context-optimizer`, `sentiment-drift-watch`, `capability-mapper`, `knowledge-vault-pruner`, `compliance-sweeper`, and `website-factory`; each remains paused until an operator activates it."
+        "The bundled hands currently shipped are `scheduled-maintenance`, `improvement-hand`, `user-correction-miner`, `regression-watch`, `provider-health-watchdog`, `docs-drift`, `ttl-garbage-collector`, `orphan-fact-cleanup`, `vector-index-reconciler`, `daily-briefing-generator`, `github-coordinator`, `docs-factory`, `error-cluster-detect`, `credential-leak-watchdog`, `usage-spike-analyzer`, `latent-reflection-miner`, `latency-anomaly-detector`, `tool-performance-baseline`, `stale-session-archiver`, `active-session-prewarmer`, `durable-object-storage-watch`, `dependency-drifter`, `secret-rotation-check`, `audit-log-compactor`, `schema-integrity-checker`, `token-budget-enforcer`, `prompt-injection-watchdog`, `reproducibility-guard`, `context-optimizer`, `sentiment-drift-watch`, `capability-mapper`, `knowledge-vault-pruner`, `compliance-sweeper`, `structural-hand-synthesis`, and `website-factory`; each remains paused until an operator activates it."
     },
     values: [
       "scheduled-maintenance",
@@ -97,12 +97,13 @@ export const defaultDocsContract: DocsContract = {
       "capability-mapper",
       "knowledge-vault-pruner",
       "compliance-sweeper",
+      "structural-hand-synthesis",
       "website-factory"
     ]
   },
   documentedSkills: {
     source: {
-      path: "docs/setup.md",
+      path: "public/docs/setup.md",
       section: "What to expect locally",
       excerpt:
         "The bundled skills currently shipped are `aarondb-research`, `gemini-review`, `incident-triage`, `hickey-simplicity-lens`, `datalog-query-expert`, `rust-borrow-oracle`, `cloudflare-edge-architect`, `sqlite-migration-guide`, `durable-object-migration-advisor`, `security-posture-audit`, `performance-tuning-skill`, `gap-analysis-pro`, `provenance-investigator`, `automated-doc-writer`, `test-scenario-designer`, `de-coupling-assistant`, `vendored-source-guide`, `operational-economist`, `intent-clarifier`, `improvement-promoter`, `vector-query-engineer`, `protocol-designer`, `release-note-generator`, `state-visualization-oracle`, `shadow-eval-coordinator`, `fact-integrity-checker`, `substrate-migration-pro`, `skill-prompt-optimizer`, and `wrangler-orchestration`."
@@ -141,7 +142,7 @@ export const defaultDocsContract: DocsContract = {
   },
   documentedOperatorRoutes: {
     source: {
-      path: "docs/runtime.md",
+      path: "public/docs/runtime.md",
       section: "Operator settings routes",
       excerpt:
         "GET/POST /api/model, GET/POST /api/key, GET /api/improvements, GET /api/improvements/:proposalKey, POST /api/improvements/:proposalKey/approve, POST /api/improvements/:proposalKey/reject, POST /api/improvements/:proposalKey/pause, GET /api/hands, GET /api/hands/:id, POST /api/hands/:id/activate, POST /api/hands/:id/pause, GET /api/skills, GET /api/skills/:id."
@@ -166,7 +167,7 @@ export const defaultDocsContract: DocsContract = {
   },
   defaultRequestedProvider: {
     source: {
-      path: "docs/setup.md",
+      path: "public/docs/setup.md",
       section: "What to expect locally",
       excerpt:
         "If Gemini key validation has succeeded, chat defaults to Gemini first, with Workers AI preserved as the fallback route when available."
@@ -215,7 +216,7 @@ function evaluateDocsDrift(input: {
     severity: "medium",
     subject: "bundled hands",
     recommendedReview:
-      "Review the bundled-hand sections in docs/setup.md and docs/runtime.md so operators see the current shipped hand posture without relying on guesswork."
+      "Review the bundled-hand sections in public/docs/setup.md and public/docs/runtime.md so operators see the current shipped hand posture without relying on guesswork."
   });
   maybePushSetDriftFinding({
     findings,
@@ -226,7 +227,7 @@ function evaluateDocsDrift(input: {
     severity: "medium",
     subject: "bundled skills",
     recommendedReview:
-      "Review the bundled-skill references in docs/setup.md and docs/runtime.md so the documented skill posture matches the manifest set."
+      "Review the bundled-skill references in public/docs/setup.md and public/docs/runtime.md so the documented skill posture matches the manifest set."
   });
   maybePushSetDriftFinding({
     findings,
@@ -237,7 +238,7 @@ function evaluateDocsDrift(input: {
     severity: "high",
     subject: "protected operator routes",
     recommendedReview:
-      "Review the operator-route table in docs/runtime.md and keep the protected route semantics aligned with the shipped /api surface."
+      "Review the operator-route table in public/docs/runtime.md and keep the protected route semantics aligned with the shipped /api surface."
   });
 
   if (runtimeRequestedProvider !== input.contract.defaultRequestedProvider.value) {
@@ -249,7 +250,7 @@ function evaluateDocsDrift(input: {
         `Docs describe ${input.contract.defaultRequestedProvider.value} as the default requested provider, ` +
         `but the runtime default resolves to ${runtimeRequestedProvider}.`,
       recommendedReview:
-        "Review the model-default wording in docs/setup.md and docs/runtime.md so the documented provider posture matches the selection logic.",
+        "Review the model-default wording in public/docs/setup.md and public/docs/runtime.md so the documented provider posture matches the selection logic.",
       source: input.contract.defaultRequestedProvider.source,
       evidence: [
         {

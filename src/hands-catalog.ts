@@ -12,6 +12,7 @@ export type BundledHandImplementation =
   | "vector-index-reconciler"
   | "daily-briefing-generator"
   | "error-cluster-detect"
+  | "managed-refactor"
   | "credential-leak-watchdog"
   | "usage-spike-analyzer"
   | "latent-reflection-miner"
@@ -337,5 +338,13 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "structural-hand-synthesis"
+  },
+  {
+    id: "managed-refactor",
+    label: "Managed Refactor Hand",
+    description: "Autonomously synthesizes and submits structural refactors to managed repositories based on telemetric approved findings.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.maintenance],
+    implementation: "managed-refactor"
   }
 ] as const satisfies readonly BundledHandDefinition[];

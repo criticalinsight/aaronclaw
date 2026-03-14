@@ -111,6 +111,32 @@ type AssistantFallbackReason =
   | "provider-error"
   | "provider-empty-response";
 
+const TOOLS = [
+  {
+    type: "function",
+    function: {
+      name: "hand-run-manual",
+      description:
+        "Executes a bundled hand manually (e.g., website-factory, docs-factory). Use this to perform proactive tasks like building a website or updating documentation.",
+      parameters: {
+        type: "object",
+        properties: {
+          handId: {
+            type: "string",
+            description: "The ID of the hand to execute (e.g., 'website-factory').",
+            enum: ["website-factory", "docs-factory"]
+          },
+          input: {
+            type: "object",
+            description: "Optional input for the hand (e.g., { prompt: '...' })."
+          }
+        },
+        required: ["handId"]
+      }
+    }
+  }
+];
+
 export interface AssistantReply {
   content: string;
   model: string | null;
@@ -118,6 +144,7 @@ export interface AssistantReply {
   source: "workers-ai" | "gemini" | "fallback";
   fallbackReason: AssistantFallbackReason | null;
   fallbackDetail: string | null;
+  tool_calls?: WorkersAiMessage["tool_calls"];
 }
 
 export function buildAssistantPersonaRuntime(input: {
@@ -193,7 +220,8 @@ export async function generateAssistantReply(input: {
         env: input.env,
         sessionId: input.sessionId,
         route: primaryRoute,
-        promptMessages: personaRuntime.promptMessages
+        promptMessages: personaRuntime.promptMessages,
+        tools: TOOLS
       })
     : buildNoRouteFailure();
 
@@ -204,7 +232,8 @@ export async function generateAssistantReply(input: {
       recallMatches,
       source: primaryAttempt.source,
       fallbackReason: null,
-      fallbackDetail: null
+      fallbackDetail: null,
+      tool_calls: primaryAttempt.tool_calls
     };
   }
 
@@ -218,7 +247,8 @@ export async function generateAssistantReply(input: {
       env: input.env,
       sessionId: input.sessionId,
       route: fallbackRoute,
-      promptMessages: personaRuntime.promptMessages
+      promptMessages: personaRuntime.promptMessages,
+      tools: TOOLS
     });
 
     if (fallbackAttempt.ok) {
@@ -238,7 +268,8 @@ export async function generateAssistantReply(input: {
         recallMatches,
         source: fallbackAttempt.source,
         fallbackReason: primaryAttempt.fallbackReason,
-        fallbackDetail: `${primaryAttempt.fallbackDetail} Fell back to ${describeAssistantRoute(fallbackRoute)}.`
+        fallbackDetail: `${primaryAttempt.fallbackDetail} Fell back to ${describeAssistantRoute(fallbackRoute)}.`,
+        tool_calls: fallbackAttempt.tool_calls
       };
     }
 
@@ -283,6 +314,7 @@ type AssistantAttemptSuccess = {
   source: "workers-ai" | "gemini";
   content: string;
   model: string;
+  tool_calls?: WorkersAiMessage["tool_calls"];
 };
 
 type AssistantAttemptFailure = {
@@ -298,6 +330,7 @@ async function attemptAssistantRoute(input: {
   sessionId: string;
   route: AssistantProviderRoute;
   promptMessages: WorkersAiMessage[];
+  tools?: any[];
 }): Promise<AssistantAttemptSuccess | AssistantAttemptFailure> {
   if (input.route.provider === "gemini") {
     return attemptGeminiRoute(input);
@@ -311,6 +344,7 @@ async function attemptWorkersAiRoute(input: {
   sessionId: string;
   route: AssistantProviderRoute;
   promptMessages: WorkersAiMessage[];
+  tools?: any[];
 }): Promise<AssistantAttemptSuccess | AssistantAttemptFailure> {
   if (!input.env.AI) {
     return buildNoRouteFailure();
@@ -319,17 +353,20 @@ async function attemptWorkersAiRoute(input: {
   try {
     const result = await input.env.AI.run(input.route.model, {
       messages: input.promptMessages,
+      tools: input.tools,
       max_tokens: 2560, // Reduced from 4096 for stable edge inference
       temperature: 0.2
     });
     const content = extractResponseText(result);
+    const tool_calls = (result as any)?.tool_calls;
 
-    if (content) {
+    if (content || tool_calls) {
       return {
         ok: true,
-        content,
+        content: content ?? "",
         model: input.route.model,
-        source: "workers-ai"
+        source: "workers-ai",
+        tool_calls
       };
     }
 
@@ -661,8 +698,10 @@ function buildPromptMessages(
 
   for (const message of session.messages.slice(-MAX_TRANSCRIPT_MESSAGES)) {
     messages.push({
-      role: message.role,
-      content: message.content
+      role: message.role as any,
+      content: message.content,
+      tool_calls: message.toolCalls,
+      tool_call_id: message.toolCallId
     });
   }
 

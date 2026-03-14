@@ -77,7 +77,9 @@ export type ToolId =
   | "knowledge-vault-pruner"
   | "compliance-sweeper"
   | "structural-hand-synthesis"
-  | "reflexive-audit";
+  | "reflexive-audit"
+  | "telemetric-audit"
+  | "telemetric-audit-proposals";
 
 export interface ToolDefinition {
   id: ToolId;
@@ -664,6 +666,22 @@ const TOOL_DEFINITIONS = {
     label: "Structural hand synthesis",
     description: "Promotes success evidence into synthesized hands via Sophia Distiller.",
     capability: "evolution.synthesize.hands",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "telemetric-audit": {
+    id: "telemetric-audit",
+    label: "Telemetric audit",
+    description: "Analyzes external project pulses for optimization opportunities.",
+    capability: "improvement.audit.telemetric",
+    policy: "scheduled-safe",
+    declarationMode: "scheduled"
+  },
+  "telemetric-audit-proposals": {
+    id: "telemetric-audit-proposals",
+    label: "Telemetric audit proposals",
+    description: "Generates external improvement proposals based on telemetric findings.",
+    capability: "improvement.propose.external",
     policy: "scheduled-safe",
     declarationMode: "scheduled"
   }

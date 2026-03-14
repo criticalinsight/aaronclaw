@@ -18,7 +18,7 @@ import { runScheduledDocsDriftReview, type DocsDriftFinding } from "./docs-drift
 import { runProviderHealthWatchdog, type ProviderHealthFinding } from "./provider-health-watchdog";
 import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
-import { AaronDbEdgeSessionRepository, type JsonObject, type ToolEvent } from "./session-state";
+import { AaronDbEdgeSessionRepository, type JsonObject, type ToolEvent, type SessionRecord } from "./session-state";
 import { buildToolAuditRecord } from "./tool-policy";
 import { KnowledgeHub } from "./knowledge-hub";
 import { queryKnowledgeVault } from "./knowledge-vault";
@@ -26,7 +26,7 @@ import { queryKnowledgeVault } from "./knowledge-vault";
 import { bundledHandDefinitions, type BundledHandDefinition } from "./hands-catalog";
 import { runGithubCoordinator as githubCoordinatorImpl } from "./github-coordinator";
 import { generateDocsSiteContent } from "./docs-generator";
-import { createGithubRepository, pushFilesToGithub } from "./github-coordinator";
+import { createGithubRepository, pushFilesToGithub, createPullRequest } from "./github-coordinator";
 import { createCloudflareWorker, putCloudflareSecret, deploySimpleSite } from "./wrangler-orchestration";
 import { readProviderKeyFromEnv } from "./provider-key-store";
 import { generateWebsiteContent } from "./website-generator";
@@ -797,6 +797,41 @@ async function executeBundledHandRun(input: {
             timestamp: input.timestamp,
             handId: input.definition.id,
             detail: `${input.definition.label} completed with ${evolution.promotedCount} promotions and ${evolution.distilledCount} distillations.`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "managed-refactor") {
+      const refactorResult = await runManagedRefactorHand({
+        env: input.env,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} processed ${refactorResult.processedCount} improvement(s). ${refactorResult.succeededCount} PR(s) submitted, ${refactorResult.errorCount} error(s).`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          processedCount: refactorResult.processedCount,
+          succeededCount: refactorResult.succeededCount,
+          errorCount: refactorResult.errorCount,
+          status: refactorResult.errorCount > 0 ? "failed" : "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: refactorResult.errorCount > 0 ? "failed" : "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} processed ${refactorResult.processedCount} improvements with ${refactorResult.succeededCount} successes.`,
+            extra: {
+              ...refactorResult
+            }
           })
         }
       });
@@ -1729,5 +1764,118 @@ async function triggerRecursiveEvolution(input: {
   return {
     promotedCount: promotedProposals.length,
     spawnedAgentCount: spawnedCount
+  };
+}
+
+async function runManagedRefactorHand(input: {
+  env: Pick<Env, "AARONDB" | "AI" | "GITHUB_TOKEN" | "DB">;
+  timestamp: string;
+}): Promise<{ processedCount: number; succeededCount: number; errorCount: number }> {
+  const dbs: D1Database[] = [input.env.AARONDB];
+  if (input.env.DB) dbs.push(input.env.DB);
+  
+  const proposalRepository = new AaronDbEdgeSessionRepository(dbs, IMPROVEMENT_PROPOSAL_SESSION_ID);
+  const session = await proposalRepository.getSession();
+  const events = session?.toolEvents ?? [];
+
+  const candidates: ImprovementProposalRecord[] = [];
+  for (const event of events) {
+    if (event.toolName === "improvement-proposal-review" && event.metadata?.proposals) {
+      const records = event.metadata.proposals as ImprovementProposalRecord[];
+      for (const p of records) {
+        if (p.status === "promoted" && p.category === "external-optimization" && !p.promotion?.liveMutationApplied) {
+          candidates.push(p);
+        }
+      }
+    }
+  }
+
+  let succeededCount = 0;
+  let errorCount = 0;
+
+  for (const proposal of candidates) {
+    try {
+      // 1. Resolve managed project configuration
+      const projectAttrs = await input.env.AARONDB.prepare(
+        "SELECT entity, value_json FROM aarondb_facts WHERE attribute = 'managed/project' AND entity LIKE ?"
+      ).bind(`${proposal.sourceSessionId}%`).first<{ entity: string; value_json: string }>();
+
+      if (!projectAttrs) {
+        console.warn(`Managed Refactor: No project found for proposal ${proposal.candidateKey}`);
+        continue;
+      }
+
+      const config = JSON.parse(projectAttrs.value_json);
+      const [owner, repo] = config.repoUrl.replace("https://github.com/", "").split("/");
+
+      // 2. Synthesize code refactor
+      const dummySession: SessionRecord = {
+        id: `refactor:${proposal.candidateKey}`,
+        createdAt: input.timestamp,
+        lastActiveAt: input.timestamp,
+        lastTx: 0,
+        persistence: "aarondb-edge",
+        memorySource: "aarondb-edge",
+        events: [],
+        messages: [],
+        toolEvents: [],
+        recallableMemoryCount: 0
+      };
+
+      const refactorReply = await generateAssistantReply({
+        env: input.env as any,
+        session: dummySession,
+        sessionId: dummySession.id,
+        userMessage: `🧙🏾‍♂️ Architectura has identified a structural improvement for ${config.repoUrl}.
+Rationale: ${proposal.rationale}
+Problem: ${proposal.problemStatement}
+Target: ${proposal.proposedAction}
+
+The improvement category is ${proposal.category}.
+Please generate the minimal code changes (files and content) required to implement this.
+Return the result as a JSON array of { path: string, content: string }.`,
+        recallMatches: [],
+        knowledgeVaultMatches: []
+      });
+
+      // Extract JSON from reply
+      const match = refactorReply.content.match(/\[[\s\S]*\]/);
+      if (!match) throw new Error("Could not extract refactor JSON from LLM response");
+      const changes = JSON.parse(match[0]) as { path: string, content: string }[];
+
+      // 3. GitHub PR
+      const branchName = `aaronclaw-refactor-${Date.now()}`;
+      await pushFilesToGithub(
+        input.env.GITHUB_TOKEN!,
+        owner,
+        repo,
+        branchName,
+        changes,
+        `AaronClaw Autonomous Refactor: ${proposal.summary}`
+      );
+
+      await createPullRequest(
+        input.env.GITHUB_TOKEN!,
+        owner,
+        repo,
+        {
+          title: `[AaronClaw] ${proposal.summary}`,
+          body: `🧙🏾‍♂️ **Autonomous Structural Refactor Proposed by AaronClaw Architectura.**\n\n### Rationale\n${proposal.rationale}\n\n### Expected Benefit\n${proposal.expectedBenefit}\n\n*This PR was generated automatically following telemetric observation and internal reflection.*`,
+          head: branchName,
+          base: config.repoBranch || "main"
+        }
+      );
+
+      succeededCount++;
+    } catch (e) {
+      console.error(`Managed Refactor: Failed for ${proposal.candidateKey}`, e);
+      errorCount++;
+    }
+  }
+
+  return {
+    processedCount: candidates.length,
+    succeededCount,
+    errorCount
   };
 }

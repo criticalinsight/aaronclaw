@@ -258,6 +258,14 @@ export interface ReflexiveAuditResult {
   generatedProposalCount: number;
 }
 
+export interface TelemetricAuditResult {
+  cron: string;
+  auditSessionId: string;
+  managedProjectCount: number;
+  receivedPulseCount: number;
+  generatedProposalCount: number;
+}
+
 export async function resolveFactsAsOf(env: any, timestamp: string, excludeSessionId: string = IMPROVEMENT_PROPOSAL_SESSION_ID): Promise<Map<string, Map<string, any>>> {
   const db = env.AARONDB || env.DB;
   if (!db) throw new Error("AARONDB binding not found");
@@ -279,6 +287,181 @@ export async function resolveFactsAsOf(env: any, timestamp: string, excludeSessi
   }
 
   return state;
+}
+
+export async function runTelemetricAudit(input: {
+  env: Pick<Env, "AARONDB">;
+  cron: string;
+  timestamp?: string;
+}): Promise<TelemetricAuditResult> {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const db = input.env.AARONDB;
+  const auditSessionId = `${MAINTENANCE_PREFIX}telemetric-audit:${timestamp.slice(0, 10)}`;
+  const auditRepository = new AaronDbEdgeSessionRepository(db, auditSessionId);
+  await ensureSyntheticSession(auditRepository, timestamp);
+
+  // 1. Fetch managed projects
+  const projectsFacts = await db.prepare(`
+    SELECT entity, value_json FROM aarondb_facts
+    WHERE attribute = 'repoUrl' AND operation = 'assert'
+  `).all<{ entity: string; value_json: string }>();
+
+  const managedProjects = projectsFacts.results.map(f => ({
+    entity: f.entity,
+    repoUrl: JSON.parse(f.value_json) as string
+  }));
+
+  if (managedProjects.length === 0) {
+    return {
+      cron: input.cron,
+      auditSessionId,
+      managedProjectCount: 0,
+      receivedPulseCount: 0,
+      generatedProposalCount: 0
+    };
+  }
+
+  // 2. Fetch recent pulses for these projects (last 1 hour)
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString();
+  const pulseFacts = await db.prepare(`
+    SELECT entity, attribute, value_json, metadata_json FROM aarondb_facts
+    WHERE attribute = 'metricValue' AND operation = 'assert'
+    AND occurred_at >= ?
+  `).bind(oneHourAgo).all<{ entity: string; attribute: string; value_json: string; metadata_json: string }>();
+
+  // Regroup pulses by project ID (entity in pulses is project ID)
+  const projectPulsesMap = new Map<string, any[]>();
+  for (const row of pulseFacts.results) {
+    const pulses = projectPulsesMap.get(row.entity) || [];
+    const meta = JSON.parse(row.metadata_json || "{}");
+    pulses.push({
+      metricKind: meta.metricKind || "unknown",
+      metricValue: JSON.parse(row.value_json)
+    });
+    projectPulsesMap.set(row.entity, pulses);
+  }
+
+  // 3. Orchestrate Engines
+  const { auditManagedProjects } = await import("./economos-engine");
+  const { distillPulsePatterns } = await import("./sophia-engine");
+  const { proposeExternalOptimizations } = await import("./architectura-engine");
+
+  const auditInputs = managedProjects.map(p => ({
+    repoUrl: p.repoUrl,
+    pulses: projectPulsesMap.get(p.entity) || []
+  }));
+
+  const economosReports = await auditManagedProjects(input.env, auditInputs);
+  
+  const sophiaInputs = managedProjects.map((p, i) => ({
+    repoUrl: p.repoUrl,
+    metrics: economosReports[i]
+  }));
+  const pulsePatterns = await distillPulsePatterns(input.env, sophiaInputs);
+
+  const architecturaInputs = managedProjects.map((p, i) => ({
+    repoUrl: p.repoUrl,
+    patterns: pulsePatterns.filter(pat => pat.id.includes(p.repoUrl)),
+    metrics: economosReports[i]
+  }));
+  const externalProposals = await proposeExternalOptimizations(input.env, architecturaInputs);
+
+  // 4. Record results and generate signals/proposals
+  let receivedPulseCount = pulseFacts.results.length;
+  let generatedProposalCount = externalProposals.length;
+
+  if (generatedProposalCount > 0) {
+    const proposalRepository = new AaronDbEdgeSessionRepository(db, IMPROVEMENT_PROPOSAL_SESSION_ID);
+    await ensureSyntheticSession(proposalRepository, timestamp);
+    
+    // Convert refactor propositions to improvement proposals
+    const improvementProposals: ImprovementProposalRecord[] = externalProposals.map(p => ({
+      proposalKey: p.id,
+      candidateKey: p.id,
+      status: "proposed",
+      summary: p.rationale,
+      problemStatement: `Detected via telemetric audit of ${p.targetModule}.`,
+      proposedAction: `Structural refactor (${p.type}) of managed project.`,
+      expectedBenefit: `Simplicity gain: ${p.estimatedSimplicityGain}%`,
+      riskLevel: "medium",
+      verificationPlan: "Verify telemetric pulse recovery after refactor promotion.",
+      derivedFromSignalKeys: ["telemetric-audit"],
+      evidence: [buildMetricEvidence(p.rationale)],
+      risk: { level: "medium", summary: "Automated refactors on managed projects require isolated verification." },
+      verification: { status: "pending", summary: "Awaiting pulse feedback from shadow deployment." },
+      shadowEvaluation: {
+        mode: "bounded-metadata-shadow",
+        status: "pending",
+        verdict: "pending",
+        baselineSummary: "Current telemetric health baseline.",
+        candidateSummary: "Proposed structural improvement.",
+        comparisonSummary: "Awaiting shadow metrics.",
+        baselineEvidenceCount: 1,
+        baselineRiskLevel: "medium",
+        baselineVerificationStatus: "pending",
+        candidateRiskLevel: "medium",
+        startedAt: null,
+        completedAt: null
+      },
+      approval: { requiresProtectedApproval: true, status: "pending", summary: "External optimization requires explicit operator approval.", approvedAt: null, rejectedAt: null },
+      promotion: { status: "not-promoted", promotedAt: null, rolledBackAt: null, productionMutation: "manual-only", liveMutationApplied: false, summary: "Manual promotion required." },
+      votes: [],
+      complectionScore: 0,
+      lifecycleHistory: [],
+      sourceReflectionSessionId: auditSessionId,
+      sourceSessionId: "global:pulse",
+      sourceLastTx: 0
+    }));
+
+    await proposalRepository.appendToolEvent({
+      timestamp,
+      toolName: "improvement-proposal-review",
+      summary: `Telemetric audit generated ${generatedProposalCount} external optimization proposal(s).`,
+      metadata: {
+        cron: input.cron,
+        generatedProposalCount,
+        proposals: improvementProposals,
+        audit: buildToolAuditRecord({
+          toolId: "telemetric-audit-proposals",
+          actor: "hand-runtime",
+          scope: "hand",
+          outcome: "succeeded",
+          timestamp,
+          sessionId: IMPROVEMENT_PROPOSAL_SESSION_ID,
+          detail: `Telemetric audit generated ${generatedProposalCount} external optimization proposal(s).`
+        })
+      }
+    });
+  }
+
+  await auditRepository.appendToolEvent({
+    timestamp,
+    toolName: "telemetric-audit",
+    summary: `Telemetric audit reviewed ${managedProjects.length} managed project(s). Pulses: ${receivedPulseCount}. Proposals: ${generatedProposalCount}.`,
+    metadata: {
+      cron: input.cron,
+      managedProjectCount: managedProjects.length,
+      receivedPulseCount,
+      generatedProposalCount,
+      audit: buildToolAuditRecord({
+        toolId: "telemetric-audit",
+        actor: "maintenance-runtime",
+        scope: "maintenance",
+        outcome: "succeeded",
+        timestamp,
+        sessionId: auditSessionId,
+        detail: `Telemetric audit reviewed ${managedProjects.length} projects.`
+      })
+    }
+  });
+
+  return {
+    cron: input.cron,
+    auditSessionId,
+    managedProjectCount: managedProjects.length,
+    receivedPulseCount,
+    generatedProposalCount
+  };
 }
 
 type UserCorrectionPatternKey =

@@ -10,9 +10,9 @@ import {
   listBundledHands,
   readBundledHandState,
   runScheduledHands,
-  setBundledHandLifecycle,
-  triggerBundledHandRunManual
+  setBundledHandLifecycle
 } from "./hands-runtime";
+import { triggerBundledHandRunManual } from "./hands-runtime";
 import {
   buildModelRegistry,
   normalizeModelSelectionId,
@@ -28,10 +28,11 @@ import {
   readPersistedModelSelection,
   setPersistedModelSelection
 } from "./model-selection-store";
-import { 
+import {
   readImprovementProposalState, 
   recordImprovementLifecycleAction,
-  resolveFactsAsOf
+  resolveFactsAsOf,
+  runTelemetricAudit
 } from "./reflection-engine";
 import { SessionRuntime } from "./session-runtime";
 import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
@@ -102,7 +103,7 @@ function isAuthorized(request: Request, env: Env): boolean {
 }
 
 async function buildRuntimeOptions(env: Env) {
-  const { selection } = await readResolvedModelSelection(env);
+  const { selection } = await readResolvedModelSelection(env, null);
 
   return {
     authRequired: isAuthConfigured(env),
@@ -122,6 +123,117 @@ async function handleTelemetryRoute(request: Request, env: Env): Promise<Respons
       "SELECT * FROM facts ORDER BY createdAt DESC LIMIT 50"
     ).all();
     return json({ facts: facts.results });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+async function handlePulseRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw: Ingesting tactical pulses from managed isolates.
+  try {
+    if (request.method !== "POST") {
+      return json({ error: "method not allowed", methods: ["POST"] }, 405);
+    }
+
+    const pulse = await request.json() as {
+      projectId: string;
+      metrics: Record<string, number | string>;
+      timestamp?: string;
+    };
+
+    if (!pulse.projectId || !pulse.metrics) {
+      return json({ error: "projectId and metrics are required" }, 400);
+    }
+
+    const occurredAt = pulse.timestamp ?? new Date().toISOString();
+    
+    // We'll record this in a dedicated 'pulse-ingestion' session or a global log.
+    // For now, let's treat the projectId as the entity.
+    const facts = Object.entries(pulse.metrics).map(([key, value], index) => ({
+      session_id: "global:pulse",
+      entity: pulse.projectId,
+      attribute: "metricValue",
+      value_json: JSON.stringify(value),
+      tx: 0, // D1 might handle auto-inc if we set it up, but here we append to a facts table
+      tx_index: index,
+      occurred_at: occurredAt,
+      operation: "assert",
+      // Custom metadata for Sophia/Architectura
+      metadata_json: JSON.stringify({ metricKind: key })
+    }));
+
+    // AaronDB persistence (using the schema from session-state for consistency)
+    // NOTE: In a real AaronClaw deployment, we'd use the SessionRuntime or a GlobalLogger DO.
+    // Here we append directly to the D1 table used for facts.
+    for (const fact of facts) {
+      await env.AARONDB.prepare(
+        "INSERT INTO aarondb_facts (session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(tx), 0) + 1 FROM aarondb_facts), ?, ?, ?)"
+      ).bind(
+        fact.session_id,
+        fact.entity,
+        fact.attribute,
+        fact.value_json,
+        fact.tx_index,
+        fact.occurred_at,
+        fact.operation
+      ).run();
+    }
+
+    return json({ status: "ingested", pulseId: occurredAt });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
+async function handleManagedProjectRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw: Registering projects for autonomous optimization.
+  try {
+    if (request.method !== "POST") {
+      return json({ error: "method not allowed", methods: ["POST"] }, 405);
+    }
+
+    const project = await request.json() as {
+      projectId: string;
+      repoUrl: string;
+      repoBranch: string;
+      optimizationTarget: string;
+    };
+
+    if (!project.projectId || !project.repoUrl || !project.optimizationTarget) {
+      return json({ error: "projectId, repoUrl, and optimizationTarget are required" }, 400);
+    }
+
+    const timestamp = new Date().toISOString();
+    const facts = [
+      { attr: "type", val: "managed-project" },
+      { attr: "repoUrl", val: project.repoUrl },
+      { attr: "repoBranch", val: project.repoBranch || "main" },
+      { attr: "optimizationTarget", val: project.optimizationTarget }
+    ].map((f, i) => ({
+      session_id: "global:projects",
+      entity: project.projectId,
+      attribute: f.attr as any,
+      value_json: JSON.stringify(f.val),
+      tx_index: i,
+      occurred_at: timestamp,
+      operation: "assert" as const
+    }));
+
+    for (const fact of facts) {
+      await env.AARONDB.prepare(
+        "INSERT INTO aarondb_facts (session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(tx), 0) + 1 FROM aarondb_facts), ?, ?, ?)"
+      ).bind(
+        fact.session_id,
+        fact.entity,
+        fact.attribute,
+        fact.value_json,
+        fact.tx_index,
+        fact.occurred_at,
+        fact.operation
+      ).run();
+    }
+
+    return json({ status: "registered", projectId: project.projectId });
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : String(error) }, 500);
   }
@@ -433,8 +545,9 @@ async function handleTelegramWebhook(request: Request, env: Env, ctx?: Execution
   }
 }
 
-async function buildModelSelectionPayload(env: Env) {
-  const { persistedModelId, selection } = await readResolvedModelSelection(env);
+async function buildModelSelectionPayload(env: Env, request?: Request) {
+  const modelHeader = request?.headers.get("X-Aaron-Model");
+  const { persistedModelId, selection } = await readResolvedModelSelection(env, modelHeader);
 
   return {
     persistedModelId,
@@ -445,8 +558,8 @@ async function buildModelSelectionPayload(env: Env) {
   };
 }
 
-async function readResolvedModelSelection(env: Env) {
-  const persistedModelId = await readPersistedModelSelection(env.AARONDB);
+async function readResolvedModelSelection(env: Env, requestedModelId: string | null = null) {
+  const persistedModelId = requestedModelId ?? await readPersistedModelSelection(env.AARONDB);
   const geminiKeyStatus = await readProviderKeyStatus({
     env,
     database: env.AARONDB,
@@ -517,7 +630,7 @@ async function handleNexusPeersRoute(request: Request, env: Env): Promise<Respon
 
 async function handleModelRoute(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET") {
-    return json(await buildModelSelectionPayload(env));
+    return json(await buildModelSelectionPayload(env, request));
   }
 
   if (request.method === "POST") {
@@ -562,7 +675,7 @@ async function handleModelRoute(request: Request, env: Env): Promise<Response> {
     }
 
     await setPersistedModelSelection(env.AARONDB, modelId);
-    return json(await buildModelSelectionPayload(env));
+    return json(await buildModelSelectionPayload(env, request));
   }
 
   return json({ error: "method not allowed", methods: ["GET", "POST"] }, 405);
@@ -817,6 +930,22 @@ export default {
       return handleTelemetryRoute(request, env);
     }
 
+    if (url.pathname === "/api/pulse") {
+      // Pulses are allowed without auth if project matches a whitelist or managed entity,
+      // but for dogfooding we'll allow it with a projectID check.
+      return handlePulseRoute(request, env);
+    }
+
+    if (url.pathname === "/api/managed/project") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return handleManagedProjectRoute(request, env);
+    }
+
+    if (url.pathname === "/api/spawn") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return handleSpawnRoute(request, env);
+    }
+
     if (request.method === "POST" && url.pathname === "/telegram/webhook") {
       return handleTelegramWebhook(request, env, ctx);
     }
@@ -937,9 +1066,8 @@ export default {
 
       return json({ sessionId, session: payload.session }, 201);
     }
-
+    
     const sessionRoute = parseSessionRoute(url.pathname);
-
     if (sessionRoute) {
       const stub = getSessionStub(env, sessionRoute.sessionId);
 
@@ -1023,6 +1151,11 @@ export default {
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     try {
       await runScheduledHands({
+        env,
+        cron: controller.cron,
+        timestamp: new Date(controller.scheduledTime).toISOString()
+      });
+      await runTelemetricAudit({
         env,
         cron: controller.cron,
         timestamp: new Date(controller.scheduledTime).toISOString()

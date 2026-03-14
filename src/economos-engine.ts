@@ -68,6 +68,69 @@ export async function auditEfficiency(env: any, state: Map<string, Map<string, a
 }
 
 /**
+ * 🧙🏾‍♂️ Economos: Measurement is the antidote to complexity.
+ * Audits external managed projects using their telemetric pulses.
+ */
+export async function auditManagedProjects(
+  env: any,
+  pulses: { repoUrl: string; pulses: any[] }[]
+): Promise<EconomosMetrics[]> {
+  const reports: EconomosMetrics[] = [];
+
+  for (const { repoUrl, pulses: projectPulses } of pulses) {
+    const timestamp = new Date().toISOString();
+    const metrics: EfficiencyMetric[] = [];
+
+    // Group pulses by kind
+    const byKind = projectPulses.reduce((acc, p) => {
+      acc[p.metricKind] = acc[p.metricKind] || [];
+      acc[p.metricKind].push(p.metricValue);
+      return acc;
+    }, {} as Record<string, number[]>);
+
+    // 1. Performance Metric (LCP or similar)
+    const lcpValues = byKind["performance:lcp"] || [];
+    if (lcpValues.length > 0) {
+      const avgLcp = lcpValues.reduce((a: number, b: number) => a + b, 0) / lcpValues.length;
+      metrics.push({
+        category: "Performance",
+        metric: "LCP",
+        value: avgLcp,
+        unit: "ms",
+        status: avgLcp > 2500 ? "warning" : "optimal",
+        summary: `Average Largest Contentful Paint is ${Math.round(avgLcp)}ms.`
+      });
+    }
+
+    // 2. Error Rate Metric
+    const errorCounts = byKind["error:count"] || [];
+    if (errorCounts.length > 0) {
+      const totalErrors = errorCounts.reduce((a: number, b: number) => a + b, 0);
+      metrics.push({
+        category: "Reliability",
+        metric: "Errors",
+        value: totalErrors,
+        unit: "count",
+        status: totalErrors > 5 ? "critical" : "optimal",
+        summary: `Captured ${totalErrors} runtime errors in the last window.`
+      });
+    }
+
+    const efficiencyScore = 100 - (metrics.filter(m => m.status !== "optimal").length * 20);
+
+    reports.push({
+      timestamp,
+      overallEfficiencyScore: Math.max(0, efficiencyScore),
+      latencyAnomalies: metrics.filter(m => m.metric === "LCP" && m.status === "warning").length,
+      totalStatefulPlaces: 0, // Not applicable for external projects via pulse alone
+      metrics
+    });
+  }
+
+  return reports;
+}
+
+/**
  * Fetches the current snapshot of economic and efficiency facts.
  */
 export async function getEconomosMetrics(env: any): Promise<EconomosMetrics> {

@@ -83,6 +83,49 @@ export async function discoverPatterns(
  * 🧙🏾‍♂️ Sophia: Recognition precedes action.
  * Compiles success facts into reusable system "Hands".
  */
+export async function distillPulsePatterns(
+  env: any,
+  managedProjects: { repoUrl: string; metrics: EconomosMetrics }[]
+): Promise<KnowledgePattern[]> {
+  const patterns: KnowledgePattern[] = [];
+
+  for (const { repoUrl, metrics } of managedProjects) {
+    // Recognize "LCP Regressions"
+    const lcpMetric = metrics.metrics.find(m => m.metric === "LCP");
+    if (lcpMetric && lcpMetric.status === "warning") {
+      patterns.push({
+        id: `pattern:lcp-spike:${repoUrl}`,
+        name: "LCP Spike Pattern",
+        description: `Persistent performance degradation detected in ${repoUrl}. Indicates potential asset bloat or routing overhead.`,
+        evidenceCount: 1,
+        avgEfficiencyGain: 15,
+        confidence: 0.85,
+        suggestedSkillId: "skill:performance:optimization"
+      });
+    }
+
+    // Recognize "Stability Drift"
+    const errorMetric = metrics.metrics.find(m => m.category === "Reliability");
+    if (errorMetric && errorMetric.status === "critical") {
+      patterns.push({
+        id: `pattern:stability-drift:${repoUrl}`,
+        name: "Stability Drift",
+        description: `Rising error rates in ${repoUrl} suggest a recent complected deployment.`,
+        evidenceCount: 1,
+        avgEfficiencyGain: 30,
+        confidence: 0.9,
+        suggestedSkillId: "skill:debugging:telemetry-audit"
+      });
+    }
+  }
+
+  return patterns;
+}
+
+/**
+ * 🧙🏾‍♂️ Sophia: Recognition precedes action.
+ * Compiles success facts into reusable system "Hands".
+ */
 export async function distillEvidence(
   env: any,
   evidence: SuccessEvidenceRecord[]
