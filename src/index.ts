@@ -239,6 +239,55 @@ async function handleManagedProjectRoute(request: Request, env: Env): Promise<Re
   }
 }
 
+async function handlePanopticonIngestRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw Phase 18: Panopticon - Ingesting external state as immutable facts.
+  try {
+    if (request.method !== "POST") {
+      return json({ error: "method not allowed", methods: ["POST"] }, 405);
+    }
+
+    const payload = await request.json() as {
+      source: string;
+      entityId: string;
+      state: any;
+      timestamp?: string;
+    };
+
+    if (!payload.source || !payload.entityId || payload.state === undefined) {
+      return json({ error: "source, entityId, and state are required" }, 400);
+    }
+
+    const occurredAt = payload.timestamp ?? new Date().toISOString();
+    
+    const fact = {
+      session_id: `external:${payload.source}`,
+      entity: payload.entityId,
+      attribute: "externalState",
+      value_json: JSON.stringify(payload.state),
+      tx_index: 0,
+      occurred_at: occurredAt,
+      operation: "assert"
+    };
+
+    // AaronDB persistence for the external state projection
+    await env.AARONDB.prepare(
+      "INSERT INTO aarondb_facts (session_id, entity, attribute, value_json, tx, tx_index, occurred_at, operation) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(tx), 0) + 1 FROM aarondb_facts), ?, ?, ?)"
+    ).bind(
+      fact.session_id,
+      fact.entity,
+      fact.attribute,
+      fact.value_json,
+      fact.tx_index,
+      fact.occurred_at,
+      fact.operation
+    ).run();
+
+    return json({ status: "ingested", source: payload.source, entityId: payload.entityId, timestamp: occurredAt }, 201);
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
 async function handleSpawnRoute(request: Request, env: Env): Promise<Response> {
   // 🧙🏾‍♂️ AaronClaw: Automating the emergence of new structures.
   try {

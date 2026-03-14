@@ -160,3 +160,27 @@ export async function getEconomosMetrics(env: any): Promise<EconomosMetrics> {
     ]
   };
 }
+
+/**
+ * 🧙🏾‍♂️ Crucible Gating (Phase 19): Governance through Economos.
+ * Adversarial self-simulation is brutally expensive. We use the 
+ * Economos constraints to authorize its execution.
+ */
+export async function canRunCrucible(env: any): Promise<boolean> {
+  // Use exports to allow ViTest to intercept the call
+  const metrics = await exports.getEconomosMetrics(env);
+  
+  if (metrics.overallEfficiencyScore < 80) {
+    return false;
+  }
+
+  const hasCriticalLatency = metrics.metrics.some(
+    (m: EfficiencyMetric) => m.category === "Performance" && m.status === "critical"
+  );
+  
+  if (hasCriticalLatency || metrics.latencyAnomalies > 5) {
+    return false;
+  }
+
+  return true;
+}

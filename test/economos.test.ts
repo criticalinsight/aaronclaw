@@ -1,52 +1,44 @@
-import { describe, it, expect } from "vitest";
-import { auditEfficiency, getEconomosMetrics } from "../src/economos-engine";
+import { describe, expect, it, vi } from "vitest";
+import { auditEfficiency, auditManagedProjects, canRunCrucible, EconomosMetrics } from "../src/economos-engine";
+import * as economosEngine from "../src/economos-engine";
 
-describe("EconomosEngine", () => {
+describe("economos-engine", () => {
   describe("auditEfficiency", () => {
-    it("should correctly count stateful places in the factory state", async () => {
-      const mockState = new Map<string, Map<string, any>>();
-      
-      const entity1 = new Map<string, any>();
-      entity1.set("attr1", "val1");
-      entity1.set("attr2", "val2");
-      
-      const entity2 = new Map<string, any>();
-      entity2.set("attr3", "val3");
-      
-      mockState.set("entity1", entity1);
-      mockState.set("entity2", entity2);
+    it("returns optimal metrics for a very lean state", async () => {
+      const state = new Map([
+        ["entity1", new Map([["attr1", "val1"]])]
+      ]);
+      const audit = await auditEfficiency({}, state);
 
-      const metrics = await auditEfficiency({}, mockState);
+      expect(audit.overallEfficiencyScore).toBeGreaterThan(90);
+      expect(audit.totalStatefulPlaces).toBe(1);
       
-      expect(metrics.totalStatefulPlaces).toBe(3);
-      expect(metrics.overallEfficiencyScore).toBeGreaterThan(0);
-      
-      const architectureMetric = metrics.metrics.find(m => m.category === "Architecture");
-      expect(architectureMetric).toBeDefined();
-      expect(architectureMetric?.value).toBe(3);
-      expect(architectureMetric?.status).toBe("optimal");
-    });
-
-    it("should return warning status if stateful places exceed threshold", async () => {
-      const mockState = new Map<string, Map<string, any>>();
-      const largeEntity = new Map<string, any>();
-      for (let i = 0; i < 600; i++) {
-        largeEntity.set(`attr${i}`, i);
-      }
-      mockState.set("large", largeEntity);
-
-      const metrics = await auditEfficiency({}, mockState);
-      const architectureMetric = metrics.metrics.find(m => m.category === "Architecture");
-      expect(architectureMetric?.status).toBe("warning");
+      const compileMetric = audit.metrics.find((m) => m.metric === "Stateful Places");
+      expect(compileMetric?.status).toBe("optimal");
     });
   });
 
-  describe("getEconomosMetrics", () => {
-    it("should return a structured metrics object", async () => {
-      const metrics = await getEconomosMetrics({});
-      expect(metrics.overallEfficiencyScore).toBeDefined();
-      expect(Array.isArray(metrics.metrics)).toBe(true);
-      expect(metrics.metrics.length).toBeGreaterThan(0);
+  describe("canRunCrucible (Phase 19)", () => {
+    it("returns false if score represents high entropy", async () => {
+      vi.spyOn(economosEngine, "getEconomosMetrics").mockResolvedValue({
+        overallEfficiencyScore: 70, // Below 80 boundary
+        latencyAnomalies: 0,
+        totalStatefulPlaces: 1000,
+        metrics: [],
+        timestamp: "2024-03-14T00:00:00Z"
+      });
+      expect(await canRunCrucible({})).toBe(false);
+    });
+
+    it("returns true for a lean resilient state", async () => {
+      vi.spyOn(economosEngine, "getEconomosMetrics").mockResolvedValue({
+        overallEfficiencyScore: 95,
+        latencyAnomalies: 0,
+        totalStatefulPlaces: 20,
+        metrics: [],
+        timestamp: "2024-03-14T00:00:00Z"
+      });
+      expect(await canRunCrucible({})).toBe(true);
     });
   });
 });

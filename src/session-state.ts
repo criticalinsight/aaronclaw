@@ -26,7 +26,9 @@ type AaronDbAttribute =
   | "optimizationTarget"
   // Pulse Telemetry Attributes
   | "metricKind"
-  | "metricValue";
+  | "metricValue"
+  // Panopticon Attributes
+  | "externalState";
 
 export interface AaronDbFactRecord {
   sessionId: string;
