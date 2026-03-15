@@ -2,7 +2,11 @@
 
 ## Decision
 
-Use `cloudflare/moltworker` as the baseline reference, but bootstrap this repo asa standard Cloudflare Worker + Durable Object application instead of preserving aCloudflare Sandbox container runtime.
+- **Memory**: Cloudflare D1 (Structured Logic) + KV (Ephemeral Context) + Vectorize (Semantic Recall).
+- **Compute**: Distributed Workers + Durable Objects for stateful consistency.
+- **Boot**: The system follows a self-rehydrating bootstrap pattern where the
+  Worker pulls core logic from the DO on every cold start, ensuring immediate
+  state restoration.
 
 ## Reuse boundary
 
@@ -22,7 +26,8 @@ Use `cloudflare/moltworker` as the baseline reference, but bootstrap this repo a
 
 The Worker/DO shell now uses an AaronDB-style state model:
 
-1. **Worker** accepts browser/API traffic and resolves one Durable Object per session.
+1. **Worker** accepts browser/API traffic and resolves one Durable Object per
+   session.
 2. **Durable Object** owns the hot in-memory projection for that session.
 3. **D1** stores the immutable AaronDB fact log for session facts, messages,
    tool events, and recall terms.
@@ -60,51 +65,80 @@ return to container-first runtime assumptions.
 
 The AaronClaw factory now operates with a redundant **Autonomous Optimization Loop**:
 
-1.  **Economos (Economic Auditor)**: Monitors operational efficiency and compute/API costs.
-2.  **Sophia (Knowledge Generator)**: Mines logs and patterns to propose structural improvements.
-3.  **Architectura (Refactor Engine)**: Generates and applies de-complecting refactors to maintain architectural purity.
-4.  **Aeturnus (The Eternal Swarm)**: Ensures the factory's persistence through distributed health monitoring and autonomous recovery pulse.
+1. **Economos (Economic Auditor)**: Monitors operational efficiency and
+   compute/API costs.
+2. **Sophia (Knowledge Generator)**: Mines logs and patterns to propose
+   structural improvements.
+3. **Architectura (Refactor Engine)**: Generates and applies de-complecting
+   refactors to maintain architectural purity.
+4. **Aeturnus (The Eternal Swarm)**: Ensures the factory's persistence through
+   distributed health monitoring and autonomous recovery pulse.
 
 ## Agentic Mind Upgrades
 
-To support high-fidelity autonomous execution, AaronClaw implements several core cognitive upgrades:
+To support high-fidelity autonomous execution, AaronClaw implements several core
+cognitive upgrades:
 
-- **Substrate Isolation**: Each Hand executes within a dedicated, isolated KV/D1 prefix (`mountSubstrateSandbox`), preventing identity leakage and cross-contamination between autonomous agents.
-- **Dynamic Semantic Expansion**: Bypassing brittle exact-match expansions, the `knowledge-vault` now uses `@cf/baai/bge-small` to perform continuous vector similarity lookups against a `semantic_ontology`, allowing for semantic understanding of terms.
-- **Synthetic Reflection Loop**: An autonomic chaos-engineering process that synthesizes "failure edge cases" from successful trajectories. These generated global patterns are fed back into the `semantic_ontology` to proactively harden the system via RL-style improvement.
+- **Substrate Isolation**: Each Hand executes within a dedicated, isolated KV/D1
+  prefix (`mountSubstrateSandbox`), preventing identity leakage and
+  cross-contamination between autonomous agents.
+- **Dynamic Semantic Expansion**: Bypassing brittle exact-match expansions, the
+  `knowledge-vault` now uses `@cf/baai/bge-small` to perform continuous vector
+  similarity lookups against a `semantic_ontology`, allowing for semantic
+  understanding of terms.
+- **Synthetic Reflection Loop**: An autonomic chaos-engineering process that
+  synthesizes "failure edge cases" from successful trajectories. These generated
+  global patterns are fed back into the `semantic_ontology` to proactively
+  harden the system via RL-style improvement.
 
 ## Hands and skills runtime
 
-- Bundled hands have evolved into specialized **Autonomous Engines**: `Economos`, `Sophia`, `Architectura`, and `Aeturnus` join the existing `scheduled-maintenance`, `improvement-hand`, and others.
+- Bundled hands have evolved into specialized **Autonomous Engines**:
+  `Economos`, `Sophia`, `Architectura`, and `Aeturnus` join the existing
+  `scheduled-maintenance`, `improvement-hand`, and others.
 - Hand lifecycle is operator-controlled through `/api/hands/:id/activate` and
-  `/api/hands/:id/pause`, while Engines expose specialized optimization routes for deep architectural work.
+  `/api/hands/:id/pause`, while Engines expose specialized optimization routes
+  for deep architectural work.
 - Bundled skills are manifest-driven and local-only. Each manifest declares its
   tool set, memory scope, prompt instructions, and required secrets.
 - The session runtime applies that manifest on every chat turn: declared tools
   gate session recall, knowledge-vault access, and model-selection behavior,
   and blocked paths are recorded in audit history instead of silently expanding
   capability.
-- The shipped self-improvement foundation has transitioned from review-first to **Autonomous-Ready**: while structured proposals are still persisted for review, the factory is now capable of high-confidence autonomous promotion when Governance Gates are passed.
+- The shipped self-improvement foundation has transitioned from review-first to
+  **Autonomous-Ready**: while structured proposals are still persisted for
+  review, the factory is now capable of high-confidence autonomous promotion
+  when Governance Gates are passed.
 
 ## Dogfood deployment path
 
-- The checked-in `wrangler.jsonc` is local-first: it keeps a stable`preview_database_id` (`aaronclaw-local`) for `wrangler dev` and local D1migrations.
-- The remote `database_id` is intentionally injected at deploy time from`AARONCLAW_D1_DATABASE_ID` into `.wrangler/deploy/wrangler.jsonc`.
-- This avoids committing a real Cloudflare resource UUID while still making theproduction deployment path explicit and repeatable.
+- The checked-in `wrangler.jsonc` is local-first: it keeps a stable
+  `preview_database_id` (`aaronclaw-local`) for `wrangler dev` and local D1
+  migrations.
+- The remote `database_id` is intentionally injected at deploy time from
+  `AARONCLAW_D1_DATABASE_ID` into `.wrangler/deploy/wrangler.jsonc`.
+- This avoids committing a real Cloudflare resource UUID while still making the
+  production deployment path explicit and repeatable.
 
 ## Minimal auth stance
 
 - Personal dogfood mode uses a single bearer token (`APP_AUTH_TOKEN`).
-- The landing page remains public so the browser can load and prompt for thattoken.
+- The landing page remains public so the browser can load and prompt for that
+  token.
 - All `/api/*` routes are protected when the token is configured.
-- This is acceptable for a single-user Worker deployment, but it is not asubstitute for Cloudflare Access or a real multi-user auth system.
+- This is acceptable for a single-user Worker deployment, but it is not a
+  substitute for Cloudflare Access or a real multi-user auth system.
 
 ## Assistant fallback stance
 
-- Gemini is the intended default operator-facing assistant path once key validation succeeds.
-- Workers AI remains the explicit safe fallback path when Gemini is unavailable or not yet validated.
-- Deterministic fallback remains enabled so first-run create/send/reload flowscontinue to work even if AI is not bound or the model call degrades.
-- Fallback is therefore an operational continuity path, not the target qualitymode for real assistant dogfooding.
+- Gemini is the intended default operator-facing assistant path once key
+  validation succeeds.
+- Workers AI remains the explicit safe fallback path when Gemini is unavailable
+  or not yet validated.
+- Deterministic fallback remains enabled so first-run create/send/reload flows
+  continue to work even if AI is not bound or the model call degrades.
+- Fallback is therefore an operational continuity path, not the target quality
+  mode for real assistant dogfooding.
 
 ## Companion docs
 
