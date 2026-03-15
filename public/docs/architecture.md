@@ -112,3 +112,5 @@ To support high-fidelity autonomous execution, AaronClaw implements several core
 - `docs/deployment.md` — Cloudflare deployment, auth posture, and troubleshooting
 - `docs/runtime.md` — public routes, browser control surface, and API behavior
 - `docs/state-model.md` — AaronDB-style fact model, replay, and recall details
+- `docs/api.html` — Diagnostic and Telemetry surface for Phase 19
+- `docs/hands.html` — The "Demiurge", "Panopticon", and "Crucible" engine specifications

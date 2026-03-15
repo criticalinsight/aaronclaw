@@ -25,7 +25,8 @@
         <h3>Operator Routes</h3>
         <p class="muted">Protected administrative endpoints for managing system state.</p>
         <div class="card">
-            <pre><code>GET /api/model
+            <pre><code>GET /health - Bootstrap resilience audit
+GET /api/model
 POST /api/model
 GET /api/key
 POST /api/key
@@ -40,6 +41,15 @@ GET /api/hands
 GET /api/hands/:id
 POST /api/hands/:id/activate
 POST /api/hands/:id/pause</code></pre>
+        </div>
+
+        <h3>Admin & Telemetry</h3>
+        <p class="muted">System-wide diagnostics and agent spawning.</p>
+        <div class="card">
+            <pre><code>GET  /api/telemetry   - Factory pulse & health
+POST /api/spawn       - Deploy new autonomous agent
+GET  /api/nexus/peers - Multi-node discovery
+POST /api/nexus/peers - Handshake with remote factory</code></pre>
         </div>
 
         <h3>Session Routes</h3>
