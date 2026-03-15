@@ -35,6 +35,9 @@ import { createCloudflareWorker, putCloudflareSecret, deploySimpleSite } from ".
 import { readProviderKeyFromEnv } from "./provider-key-store";
 import { generateWebsiteContent } from "./website-generator";
 import { runKnowledgeBroadcaster, runKnowledgeSubscriber } from "./nexus-engine";
+import { runDemiurgeMetaHand } from "./hands/demiurge-meta-hand";
+import { runSovereignRebalanceHand } from "./hands/sovereign-rebalance-hand";
+import { runEthicsAlignmentHand } from "./hands/ethics-alignment-hand";
 
 const HAND_SESSION_PREFIX = "hand:";
 const HAND_LIFECYCLE_TOOL = "hand-lifecycle";
@@ -1027,6 +1030,85 @@ async function executeBundledHandRun(input: {
             timestamp: input.timestamp,
             handId: input.definition.id,
             detail: `${input.definition.label} found ${auditResult.defectCount} defects and applied ${auditResult.correctionCount} corrections.`
+          })
+        }
+      });
+      return;
+    }
+    if (input.definition.implementation === "demiurge-meta-hand") {
+      const result = await runDemiurgeMetaHand(sandboxedEnv, input.timestamp);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} processed promoted proposals. PR Submitted: ${result.prSubmitted ? "Yes" : "No"}. Details: ${result.summary}`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          status: "succeeded",
+          prSubmitted: result.prSubmitted,
+          summary: result.summary,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} evolution cycle completed: ${result.summary}`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "sovereign-rebalance") {
+      const result = await runSovereignRebalanceHand(sandboxedEnv);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} completed. Applied Fix: ${result.appliedFix ? "Yes" : "No"}. Report: ${result.message}`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          status: "succeeded",
+          appliedFix: result.appliedFix,
+          report: result.message,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} finished: ${result.message}`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "ethics-alignment") {
+      const result = await runEthicsAlignmentHand(sandboxedEnv);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} completed. Score: ${result.score}. Status: ${result.status}`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          status: "succeeded",
+          score: result.score,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} performed ethics audit. Purity Score: ${result.score}`
           })
         }
       });

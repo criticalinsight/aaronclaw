@@ -25,42 +25,6 @@
         <div class="grid">
             
             <div class="card">
-                <h3>Economos (Economic Auditor)</h3>
-                <p>Autonomous optimizer that treats architectural complexity as an economic expense, running periodic rebalancing algorithms.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>economos</code></li>
-                    <li><strong>Runtime:</strong> cloudflare-cron</li>
-                    <li><strong>Crons:</strong> 0 0 * * *</li>
-                </ul>
-            </div>
-            <div class="card">
-                <h3>Sophia (Knowledge Generator)</h3>
-                <p>Recursively mines session facts to synthesize new skills, rules, and actionable optimization patterns.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>sophia</code></li>
-                    <li><strong>Runtime:</strong> cloudflare-cron</li>
-                    <li><strong>Crons:</strong> 0 0 * * *</li>
-                </ul>
-            </div>
-            <div class="card">
-                <h3>Architectura (Refactor Engine)</h3>
-                <p>Executes autonomous structural self-optimization and de-complecting refactors to maintain architectural purity.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>architectura</code></li>
-                    <li><strong>Runtime:</strong> script / cloudflare-cron</li>
-                    <li><strong>Crons:</strong> 0 0 * * *</li>
-                </ul>
-            </div>
-            <div class="card">
-                <h3>Aeturnus (The Eternal Swarm)</h3>
-                <p>Governs full swarm decentralization and cross-cloud persistence to ensure system immortality and resilience.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>aeturnus</code></li>
-                    <li><strong>Runtime:</strong> cloudflare-cron</li>
-                    <li><strong>Crons:</strong> * * * * *</li>
-                </ul>
-            </div>
-            <div class="card">
                 <h3>Scheduled maintenance hand</h3>
                 <p>Reuses the existing reflection/maintenance path on Cloudflare cron triggers without introducing a separate runtime.</p>
                 <ul class="detail-list">
@@ -107,7 +71,7 @@
             </div>
             <div class="card">
                 <h3>Docs drift hand</h3>
-                <p>Compares a bounded bundled docs contract against shipped runtime posture and records reviewable findings without editing repo docs automatically.</p>
+                <p>Compares a bounded bundled docs contract against shipped documentation to detect drift.</p>
                 <ul class="detail-list">
                     <li><strong>ID:</strong> <code>docs-drift</code></li>
                     <li><strong>Runtime:</strong> cloudflare-cron</li>
@@ -277,10 +241,10 @@
                 </ul>
             </div>
             <div class="card">
-                <h3>Schema integrity checker</h3>
+                <h3>Fact integrity checker</h3>
                 <p>Validates D1 and AaronDB schema parity.</p>
                 <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>schema-integrity-checker</code></li>
+                    <li><strong>ID:</strong> <code>fact-integrity-checker</code></li>
                     <li><strong>Runtime:</strong> cloudflare-cron</li>
                     <li><strong>Crons:</strong> */30 * * * *</li>
                 </ul>
@@ -372,65 +336,88 @@
                 <ul class="detail-list">
                     <li><strong>ID:</strong> <code>structural-hand-synthesis</code></li>
                     <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 8 * * *</li>
                 </ul>
             </div>
             <div class="card">
                 <h3>Managed Refactor Hand</h3>
-                <p>Autonomously synthesizes and submits structural refactors based on telemetric approved findings.</p>
+                <p>Autonomously synthesizes and submits structural refactors to managed repositories based on telemetric approved findings.</p>
                 <ul class="detail-list">
                     <li><strong>ID:</strong> <code>managed-refactor</code></li>
                     <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
                 </ul>
             </div>
             <div class="card">
                 <h3>Synthetic Reflection Loop</h3>
-                <p>Generates high-probability failure edge cases and chaos scenarios to improve system robustness.</p>
+                <p>Generates high-probability failure edge cases and chaos scenarios from successful trajectories to improve robustness.</p>
                 <ul class="detail-list">
                     <li><strong>ID:</strong> <code>synthetic-reflection-loop</code></li>
                     <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 8 * * *</li>
                 </ul>
             </div>
             <div class="card">
-                <h3>Panopticon (Reality Ingest)</h3>
-                <p>Ingests third-party external state as immutable facts into AaronDB, establishing a local projection of reality.</p>
+                <h3>Mesh Coordinator Hand</h3>
+                <p>Evaluates high-level system state and asserts MeshSignals to orchestrate autonomous Hand cooperation.</p>
                 <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>panopticon</code></li>
-                    <li><strong>Runtime:</strong> cloudflare-worker</li>
-                </ul>
-            </div>
-            <div class="card">
-                <h3>Demiurge (Policy Engine)</h3>
-                <p>Interprets declarative domain DSLs to execute pure data-driven logic without imperative code bloat.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>demiurge</code></li>
-                    <li><strong>Runtime:</strong> engine-core</li>
-                </ul>
-            </div>
-            <div class="card">
-                <h3>Crucible (Adversarial Gating)</h3>
-                <p>Governs adversarial self-simulations by gating them behind strict Economos efficiency and budget checks.</p>
-                <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>crucible</code></li>
-                    <li><strong>Runtime:</strong> internal-sim</li>
+                    <li><strong>ID:</strong> <code>mesh-coordinator</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
                     <li><strong>Crons:</strong> */30 * * * *</li>
                 </ul>
             </div>
-            <div class="card highlight">
-                <h3>Nexus Broadcaster</h3>
-                <p>Distills local architectural improvements into anonymous universal patterns for cross-factory synthesis.</p>
+            <div class="card">
+                <h3>Substrate Integrity Warden</h3>
+                <p>Audits the shared AaronDB facts for signal contradictions or complected state.</p>
                 <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>nexus-broadcaster-hand</code></li>
-                    <li><strong>Runtime:</strong> internal-nexus</li>
-                    <li><strong>Crons:</strong> 0 0 * * *</li>
+                    <li><strong>ID:</strong> <code>substrate-warden</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
                 </ul>
             </div>
-            <div class="card highlight">
-                <h3>Nexus Subscriber</h3>
-                <p>Ingests universal patterns from the Knowledge Nexus and asserts local synthesis signals for evolution.</p>
+            <div class="card">
+                <h3>Knowledge Broadcaster Hand</h3>
+                <p>Anonymously distills local improvement patterns and asserts them to the global Knowledge Nexus.</p>
                 <ul class="detail-list">
-                    <li><strong>ID:</strong> <code>nexus-subscriber-hand</code></li>
-                    <li><strong>Runtime:</strong> internal-nexus</li>
-                    <li><strong>Crons:</strong> 0 0 * * *</li>
+                    <li><strong>ID:</strong> <code>nexus-broadcaster</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 8 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Knowledge Subscriber Hand</h3>
+                <p>Queries the global Knowledge Nexus for distilled patterns and injects them into the local factory as synthesis signals.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>nexus-subscriber</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> */30 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Demiurge Meta-Hand</h3>
+                <p>Synthesizes new Hand implementations from Knowledge Nexus proposals and submits self-modifying PRs.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>demiurge-meta-hand</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 * * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Sovereign Rebalance Hand</h3>
+                <p>Audits substrate drift and autonomously applies infrastructure fixes via the Sovereign Engine.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>sovereign-rebalance</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 2 * * *</li>
+                </ul>
+            </div>
+            <div class="card">
+                <h3>Ethics Alignment Hand</h3>
+                <p>Performs recursive purity checks to ensure the codebase aligns with Sovereign Ethics principles.</p>
+                <ul class="detail-list">
+                    <li><strong>ID:</strong> <code>ethics-alignment</code></li>
+                    <li><strong>Runtime:</strong> cloudflare-cron</li>
+                    <li><strong>Crons:</strong> 0 3 * * *</li>
                 </ul>
             </div>
         </div>

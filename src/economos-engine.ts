@@ -184,3 +184,19 @@ export async function canRunCrucible(env: any): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * 🧙🏾‍♂️ Economos Gating for Evolution (Phase 23).
+ * Meta-circular evolution must be economically sustainable. 
+ */
+export async function canRunEvolution(env: any): Promise<boolean> {
+  const metrics = await exports.getEconomosMetrics(env);
+  
+  // Hard gate: Efficiency score must be high to justify the cost of evolution.
+  if (metrics.overallEfficiencyScore < 85) {
+    console.warn(`⚠️ Economos: Efficiency score ${metrics.overallEfficiencyScore} is too low for evolution.`);
+    return false;
+  }
+
+  return true;
+}

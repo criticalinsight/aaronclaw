@@ -25,8 +25,7 @@
         <h3>Operator Routes</h3>
         <p class="muted">Protected administrative endpoints for managing system state.</p>
         <div class="card">
-            <pre><code>GET /health - Bootstrap resilience audit
-GET /api/model
+            <pre><code>GET /api/model
 POST /api/model
 GET /api/key
 POST /api/key
@@ -43,15 +42,6 @@ POST /api/hands/:id/activate
 POST /api/hands/:id/pause</code></pre>
         </div>
 
-        <h3>Admin & Telemetry</h3>
-        <p class="muted">System-wide diagnostics and agent spawning.</p>
-        <div class="card">
-            <pre><code>GET  /api/telemetry   - Factory pulse & health
-POST /api/spawn       - Deploy new autonomous agent
-GET  /api/nexus/peers - Multi-node discovery
-POST /api/nexus/peers - Handshake with remote factory</code></pre>
-        </div>
-
         <h3>Session Routes</h3>
         <p class="muted">Live conversation and state management endpoints.</p>
         <div class="card">
@@ -62,16 +52,6 @@ POST /api/sessions/:id/messages
 POST /api/sessions/:id/tool-events
 GET /api/sessions/:id/recall?q=...
 POST /api/sessions/:id/sync</code></pre>
-        </div>
-
-        <h3>Telegram Bot Interface</h3>
-        <p class="muted">Autonomous tactile control via Telegram.</p>
-        <div class="card">
-            <pre><code>/start  - Quick tactical awareness menu
-/status - Multi-engine health summary
-/hands  - Tactical lifecycle management
-/audit  - Telemetric fact verification
-/site   - Factory showcase entry</code></pre>
         </div>
     </main>
 </body>

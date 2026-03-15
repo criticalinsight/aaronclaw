@@ -1,4 +1,11 @@
 import { scheduledMaintenanceCrons } from "./reflection-engine";
+import { runKnowledgeBroadcaster as runKnowledgeBroadcasterImpl, runKnowledgeSubscriber as runKnowledgeSubscriberImpl } from "./nexus-engine";
+// Mock functions or wrappers if needed, but here we just point to the right place.
+const runKnowledgeBroadcaster = runKnowledgeBroadcasterImpl;
+const runKnowledgeSubscriber = runKnowledgeSubscriberImpl;
+import { runDemiurgeMetaHand } from "./hands/demiurge-meta-hand";
+import { runSovereignRebalanceHand } from "./hands/sovereign-rebalance-hand";
+import { runEthicsAlignmentHand } from "./hands/ethics-alignment-hand";
 
 export type BundledHandImplementation =
   | "scheduled-maintenance"
@@ -44,17 +51,65 @@ export type BundledHandImplementation =
   | "mesh-coordinator-hand"
   | "substrate-integrity-warden"
   | "nexus-broadcaster-hand"
-  | "nexus-subscriber-hand";
+  | "nexus-subscriber-hand"
+  | "demiurge-meta-hand"
+  | "sovereign-rebalance"
+  | "ethics-alignment";
 
-// Removed duplicate BundledHandImplementation type
+export type HandId =
+  | "scheduled-maintenance"
+  | "improvement-hand"
+  | "user-correction-miner"
+  | "regression-watch"
+  | "provider-health-watchdog"
+  | "docs-drift"
+  | "ttl-garbage-collector"
+  | "orphan-fact-cleanup"
+  | "vector-index-reconciler"
+  | "daily-briefing-generator"
+  | "github-coordinator"
+  | "docs-factory"
+  | "error-cluster-detect"
+  | "credential-leak-watchdog"
+  | "usage-spike-analyzer"
+  | "latent-reflection-miner"
+  | "latency-anomaly-detector"
+  | "tool-performance-baseline"
+  | "stale-session-archiver"
+  | "active-session-prewarmer"
+  | "durable-object-storage-watch"
+  | "dependency-drifter"
+  | "secret-rotation-check"
+  | "audit-log-compactor"
+  | "fact-integrity-checker"
+  | "token-budget-enforcer"
+  | "prompt-injection-watchdog"
+  | "reproducibility-guard"
+  | "context-optimizer"
+  | "sentiment-drift-watch"
+  | "capability-mapper"
+  | "knowledge-vault-pruner"
+  | "compliance-sweeper"
+  | "website-factory"
+  | "structural-hand-synthesis"
+  | "managed-refactor"
+  | "synthetic-reflection-loop"
+  | "mesh-coordinator"
+  | "substrate-warden"
+  | "nexus-broadcaster"
+  | "nexus-subscriber"
+  | "demiurge-meta-hand"
+  | "sovereign-rebalance"
+  | "ethics-alignment";
 
 export interface BundledHandDefinition {
-  readonly id: string;
+  readonly id: HandId;
   readonly label: string;
   readonly description: string;
   readonly runtime: "cloudflare-cron" | "cloudflare-native";
   readonly scheduleCrons: readonly string[];
   readonly implementation: BundledHandImplementation;
+  readonly run?: (env: any, timestamp: string) => Promise<any>;
 }
 
 export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
@@ -107,7 +162,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     id: "docs-drift",
     label: "Docs drift hand",
     description:
-      "Compares a bounded bundled docs contract against shipped runtime posture and records reviewable findings without editing repo docs automatically.",
+      "Compares a bounded bundled docs contract against shipped documentation to detect drift.",
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "docs-drift"
@@ -257,8 +312,8 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     implementation: "audit-log-compactor"
   },
   {
-    id: "schema-integrity-checker",
-    label: "Schema integrity checker",
+    id: "fact-integrity-checker",
+    label: "Fact integrity checker",
     description: "Validates D1 and AaronDB schema parity.",
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
@@ -391,5 +446,32 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "nexus-subscriber-hand"
+  },
+  {
+    id: "demiurge-meta-hand",
+    label: "Demiurge Meta-Hand",
+    description: "Synthesizes new Hand implementations from Knowledge Nexus proposals and submits self-modifying PRs.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["0 * * * *"],
+    implementation: "demiurge-meta-hand",
+    run: runDemiurgeMetaHand
+  },
+  {
+    id: "sovereign-rebalance",
+    label: "Sovereign Rebalance Hand",
+    description: "Audits substrate drift and autonomously applies infrastructure fixes via the Sovereign Engine.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["0 2 * * *"],
+    implementation: "sovereign-rebalance",
+    run: runSovereignRebalanceHand
+  },
+  {
+    id: "ethics-alignment",
+    label: "Ethics Alignment Hand",
+    description: "Performs recursive purity checks to ensure the codebase aligns with Sovereign Ethics principles.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["0 3 * * *"],
+    implementation: "ethics-alignment",
+    run: runEthicsAlignmentHand
   }
-] as const satisfies readonly BundledHandDefinition[];
+];
