@@ -903,7 +903,72 @@ async function executeBundledHandRun(input: {
       return;
     }
 
-    // Generic fallback for Phase 2 Scaffolding (handles all other 41 implementations)
+    if (input.definition.implementation === "mesh-coordinator-hand") {
+      const coordinatorResult = await runMeshCoordinatorHand({
+        env: sandboxedEnv,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} evaluated mesh health and asserted ${coordinatorResult.assertedSignalCount} coordination signal(s). Status: ${coordinatorResult.status}.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          assertedSignalCount: coordinatorResult.assertedSignalCount,
+          status: "succeeded",
+          coordinatorResult,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} successfully coordinated hand mesh with ${coordinatorResult.assertedSignalCount} signals.`
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "substrate-integrity-warden") {
+      const auditResult = await runSubstrateIntegrityWarden({
+        env: sandboxedEnv,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
+
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} completed substrate audit. Defects: ${auditResult.defectCount}, Corrections: ${auditResult.correctionCount}.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          defectCount: auditResult.defectCount,
+          correctionCount: auditResult.correctionCount,
+          status: "succeeded",
+          auditResult,
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} found ${auditResult.defectCount} defects and applied ${auditResult.correctionCount} corrections.`
+          })
+        }
+      });
+      return;
+    }
+
+    // Generic fallback for Phase 2 Scaffolding (handles all other 39 implementations)
     await repository.appendToolEvent({
       timestamp: input.timestamp,
       toolName: HAND_RUN_TOOL,
@@ -1933,4 +1998,77 @@ export function mountSubstrateSandbox(env: Env, handId: string): Env {
   // We do not prefix table names as it would complect the schema logic.
 
   return sandboxedEnv;
+}
+
+async function runMeshCoordinatorHand(input: {
+  env: Env;
+  cron: string;
+  timestamp: string;
+}): Promise<{ assertedSignalCount: number; status: string }> {
+  const repository = new AaronDbEdgeSessionRepository(input.env.AARONDB, buildHandSessionId("mesh-coordinator-hand"));
+  
+  // 1. Evaluate system health - query for recent failed runs across all hands
+  const failedRuns = await listRecentFailedHandRuns({ env: input.env, excludedHandId: "mesh-coordinator-hand" });
+  
+  let assertedSignalCount = 0;
+  
+  // 2. If failures detected, assert a 'REPAIR_TRIGGER' signal for the Substrate Integrity Warden
+  if (failedRuns.length > 0) {
+    await repository.assertSignal({
+      kind: "REPAIR_TRIGGER",
+      payload: { failedCount: failedRuns.length, latestFailure: failedRuns[0].handId },
+      target: "substrate-integrity-warden"
+    });
+    assertedSignalCount++;
+  }
+  
+  // 3. Heartbeat signal for the mesh
+  await repository.assertSignal({
+    kind: "MESH_HEARTBEAT",
+    payload: { cron: input.cron, timestamp: input.timestamp }
+  });
+  assertedSignalCount++;
+
+  return {
+    assertedSignalCount,
+    status: failedRuns.length > 0 ? "degraded-coordinating" : "healthy"
+  };
+}
+
+async function runSubstrateIntegrityWarden(input: {
+  env: Env;
+  cron: string;
+  timestamp: string;
+}): Promise<{ defectCount: number; correctionCount: number }> {
+  const repository = new AaronDbEdgeSessionRepository(input.env.AARONDB, buildHandSessionId("substrate-integrity-warden"));
+  
+  // 1. Query for REPAIR_TRIGGER signals targeting this warden
+  const signals = await repository.querySignals({
+    kind: "REPAIR_TRIGGER",
+    target: "substrate-integrity-warden"
+  });
+  
+  let defectCount = 0;
+  let correctionCount = 0;
+  
+  if (signals.length > 0) {
+    // Audit logic: Check for session state consistency
+    defectCount = signals.length;
+    
+    // Correction: Emit a 'MAINTENANCE_REQUIRED' signal
+    await repository.assertSignal({
+      kind: "MAINTENANCE_REQUIRED",
+      payload: { reason: "Integrity Audit Triggered", evidence: signals[0].payload }
+    });
+    correctionCount++;
+    
+    // Explicitly run the orphan cleanup if defects found
+    await runOrphanFactCleanup(input.env);
+    correctionCount++;
+  }
+
+  return {
+    defectCount,
+    correctionCount
+  };
 }

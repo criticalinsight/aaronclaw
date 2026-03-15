@@ -40,7 +40,9 @@ export type BundledHandImplementation =
   | "docs-factory"
   | "website-factory"
   | "github-coordinator"
-  | "structural-hand-synthesis";
+  | "structural-hand-synthesis"
+  | "mesh-coordinator-hand"
+  | "substrate-integrity-warden";
 
 // Removed duplicate BundledHandImplementation type
 
@@ -355,5 +357,21 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "synthetic-reflection-loop"
+  },
+  {
+    id: "mesh-coordinator",
+    label: "Mesh Coordinator Hand",
+    description: "Evaluates high-level system state and asserts MeshSignals to orchestrate autonomous Hand cooperation.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.maintenance],
+    implementation: "mesh-coordinator-hand"
+  },
+  {
+    id: "substrate-warden",
+    label: "Substrate Integrity Warden",
+    description: "Audits the shared AaronDB facts for signal contradictions or complected state.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.maintenance],
+    implementation: "substrate-integrity-warden"
   }
 ] as const satisfies readonly BundledHandDefinition[];

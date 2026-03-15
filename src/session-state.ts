@@ -10,6 +10,7 @@ export type SessionEventKind = "message" | "tool-event";
 type AaronDbAttribute =
   | "type"
   | "createdAt"
+  | "occurredAt"
   | "lastActiveAt"
   | "session"
   | "role"
@@ -28,7 +29,11 @@ type AaronDbAttribute =
   | "metricKind"
   | "metricValue"
   // Panopticon Attributes
-  | "externalState";
+  | "externalState"
+  // MeshSignal Attributes
+  | "signalKind"
+  | "signalPayload"
+  | "signalTarget";
 
 export interface AaronDbFactRecord {
   sessionId: string;
@@ -122,6 +127,15 @@ export interface SessionStateRepository {
     asOf?: number;
   }): Promise<RecallMatch[]>;
   syncFacts(facts: AaronDbFactRecord[]): Promise<void>;
+  assertSignal(input: { kind: string; payload: JsonValue; target?: string }): Promise<void>;
+  querySignals(options?: { kind?: string; target?: string; asOf?: number }): Promise<MeshSignal[]>;
+}
+
+export interface MeshSignal {
+  kind: string;
+  payload: JsonValue;
+  target?: string;
+  occurredAt: string;
 }
 
 type AaronDbEntityIndex = Map<AaronDbAttribute, AaronDbFactRecord[]>;
@@ -520,6 +534,71 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
 
   async syncFacts(facts: AaronDbFactRecord[]): Promise<void> {
     await this._appendAndApplyFacts(facts);
+  }
+
+  async assertSignal(input: { kind: string; payload: JsonValue; target?: string }): Promise<void> {
+    await this._ensureHydrated();
+    this._assertInitialized();
+
+    const tx = this._nextTx();
+    const timestamp = new Date().toISOString();
+    const entity = `signal:${input.kind}:${tx}`;
+
+    const factData: { entity: string; attribute: AaronDbAttribute; value: JsonValue }[] = [
+      { entity, attribute: "type", value: "signal" },
+      { entity, attribute: "signalKind", value: input.kind },
+      { entity, attribute: "signalPayload", value: input.payload },
+      { entity, attribute: "occurredAt", value: timestamp },
+    ];
+
+    if (input.target) {
+      factData.push({ entity, attribute: "signalTarget", value: input.target });
+    }
+
+    const facts = factData.map((data, index) => ({
+      sessionId: this.sessionId,
+      entity: data.entity,
+      attribute: data.attribute,
+      value: data.value,
+      tx,
+      txIndex: index,
+      occurredAt: timestamp,
+      operation: "assert" as const,
+    }));
+
+    await this._appendAndApplyFacts(facts);
+  }
+
+  async querySignals(options?: { kind?: string; target?: string; asOf?: number }): Promise<MeshSignal[]> {
+    await this._ensureHydrated();
+    
+    // Find all entities of type "signal"
+    const signalEntities = this.memoryIndex.findEntities("type", "signal", options?.asOf);
+    const results: MeshSignal[] = [];
+
+    for (const entity of signalEntities) {
+      const kind = asString(this.memoryIndex.getLatestValue(entity, "signalKind", options?.asOf));
+      const payload = this.memoryIndex.getLatestValue(entity, "signalPayload", options?.asOf);
+      const target = asString(this.memoryIndex.getLatestValue(entity, "signalTarget", options?.asOf));
+      const occurredAt = asString(this.memoryIndex.getLatestValue(entity, "occurredAt", options?.asOf)) ?? "";
+
+      if (!kind || !payload) continue;
+
+      let match = true;
+      if (options?.kind && kind !== options.kind) match = false;
+      if (options?.target && target !== options.target) match = false;
+
+      if (match) {
+        results.push({
+          kind,
+          payload,
+          target,
+          occurredAt
+        });
+      }
+    }
+
+    return results;
   }
 
   private _ensureHydrated(): Promise<void> {

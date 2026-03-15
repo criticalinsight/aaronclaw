@@ -91,6 +91,27 @@ cognitive upgrades:
   global patterns are fed back into the `semantic_ontology` to proactively
   harden the system via RL-style improvement.
 
+## Hand Mesh Coordination (Phase 20)
+
+The factory has moved from discrete execution to a **Self-Organizing Mesh**:
+
+- **MeshSignals**: Hands communicate by asserting and querying `MeshSignal` facts
+  in AaronDB. This "de-complects" the intent of a signal from the mechanism of
+  its delivery.
+- **Autonomous Coordination**: 
+  - `mesh-coordinator-hand` monitors the heartbeat of the fleet and asserts
+    `REPAIR_TRIGGER` signals when degradation is detected.
+  - `substrate-integrity-warden` consumes repair signals and executes
+    `runOrphanFactCleanup` to autonomously resolve technical debt.
+- **Purity Enforcement**: Using signals ensures that no Hand ever holds a direct
+  reference to another Hand's internal state, maintaining 100% substrate
+  isolation.
+
+> [!WARNING]
+> **Rich Hickey Warning**: Direct RPC between Hands is a road to complection. The
+> `MeshSignal` substrate is the only approved channel for cross-agent
+> coordination.
+
 ## Hands and skills runtime
 
 - Bundled hands have evolved into specialized **Autonomous Engines**:
@@ -148,3 +169,4 @@ cognitive upgrades:
 - `docs/state-model.md` — AaronDB-style fact model, replay, and recall details
 - `docs/api.html` — Diagnostic and Telemetry surface for Phase 19
 - `docs/hands.html` — The "Demiurge", "Panopticon", and "Crucible" engine specifications
+- `docs/hands_skills_roadmap.md` — The evolutionary path towards Phase 22 Transcendence
