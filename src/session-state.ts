@@ -33,7 +33,11 @@ type AaronDbAttribute =
   // MeshSignal Attributes
   | "signalKind"
   | "signalPayload"
-  | "signalTarget";
+  | "signalTarget"
+  // KnowledgeNexus Attributes
+  | "patternSummary"
+  | "patternContext"
+  | "patternDistillationTx";
 
 export interface AaronDbFactRecord {
   sessionId: string;
@@ -129,6 +133,15 @@ export interface SessionStateRepository {
   syncFacts(facts: AaronDbFactRecord[]): Promise<void>;
   assertSignal(input: { kind: string; payload: JsonValue; target?: string }): Promise<void>;
   querySignals(options?: { kind?: string; target?: string; asOf?: number }): Promise<MeshSignal[]>;
+  assertPattern(input: { summary: string; context: JsonObject; distillationTx: number }): Promise<void>;
+  queryPatterns(options?: { asOf?: number }): Promise<KnowledgePattern[]>;
+}
+
+export interface KnowledgePattern {
+  summary: string;
+  context: JsonObject;
+  distillationTx: number;
+  occurredAt: string;
 }
 
 export interface MeshSignal {
@@ -596,6 +609,61 @@ export class AaronDbEdgeSessionRepository implements SessionStateRepository {
           occurredAt
         });
       }
+    }
+
+    return results;
+  }
+
+  async assertPattern(input: { summary: string; context: JsonObject; distillationTx: number }): Promise<void> {
+    await this._ensureHydrated();
+    this._assertInitialized();
+
+    const tx = this._nextTx();
+    const timestamp = new Date().toISOString();
+    const entity = `pattern:${tx}`;
+
+    const factData: { entity: string; attribute: AaronDbAttribute; value: JsonValue }[] = [
+      { entity, attribute: "type", value: "pattern" },
+      { entity, attribute: "patternSummary", value: input.summary },
+      { entity, attribute: "patternContext", value: input.context },
+      { entity, attribute: "patternDistillationTx", value: input.distillationTx },
+      { entity, attribute: "occurredAt", value: timestamp },
+    ];
+
+    const facts = factData.map((data, index) => ({
+      sessionId: this.sessionId,
+      entity: data.entity,
+      attribute: data.attribute,
+      value: data.value,
+      tx,
+      txIndex: index,
+      occurredAt: timestamp,
+      operation: "assert" as const,
+    }));
+
+    await this._appendAndApplyFacts(facts);
+  }
+
+  async queryPatterns(options?: { asOf?: number }): Promise<KnowledgePattern[]> {
+    await this._ensureHydrated();
+    
+    const patternEntities = this.memoryIndex.findEntities("type", "pattern", options?.asOf);
+    const results: KnowledgePattern[] = [];
+
+    for (const entity of patternEntities) {
+      const summary = asString(this.memoryIndex.getLatestValue(entity, "patternSummary", options?.asOf));
+      const context = asJsonObject(this.memoryIndex.getLatestValue(entity, "patternContext", options?.asOf));
+      const distillationTx = this.memoryIndex.getLatestValue(entity, "patternDistillationTx", options?.asOf) as number;
+      const occurredAt = asString(this.memoryIndex.getLatestValue(entity, "occurredAt", options?.asOf)) ?? "";
+
+      if (!summary || !context) continue;
+
+      results.push({
+        summary,
+        context,
+        distillationTx,
+        occurredAt
+      });
     }
 
     return results;

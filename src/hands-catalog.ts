@@ -42,7 +42,9 @@ export type BundledHandImplementation =
   | "github-coordinator"
   | "structural-hand-synthesis"
   | "mesh-coordinator-hand"
-  | "substrate-integrity-warden";
+  | "substrate-integrity-warden"
+  | "nexus-broadcaster-hand"
+  | "nexus-subscriber-hand";
 
 // Removed duplicate BundledHandImplementation type
 
@@ -373,5 +375,21 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     runtime: "cloudflare-cron",
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "substrate-integrity-warden"
+  },
+  {
+    id: "nexus-broadcaster",
+    label: "Knowledge Broadcaster Hand",
+    description: "Anonymously distills local improvement patterns and asserts them to the global Knowledge Nexus.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
+    implementation: "nexus-broadcaster-hand"
+  },
+  {
+    id: "nexus-subscriber",
+    label: "Knowledge Subscriber Hand",
+    description: "Queries the global Knowledge Nexus for distilled patterns and injects them into the local factory as synthesis signals.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: [scheduledMaintenanceCrons.maintenance],
+    implementation: "nexus-subscriber-hand"
   }
 ] as const satisfies readonly BundledHandDefinition[];

@@ -34,6 +34,7 @@ import { createGithubRepository, pushFilesToGithub, createPullRequest } from "./
 import { createCloudflareWorker, putCloudflareSecret, deploySimpleSite } from "./wrangler-orchestration";
 import { readProviderKeyFromEnv } from "./provider-key-store";
 import { generateWebsiteContent } from "./website-generator";
+import { runKnowledgeBroadcaster, runKnowledgeSubscriber } from "./nexus-engine";
 
 const HAND_SESSION_PREFIX = "hand:";
 const HAND_LIFECYCLE_TOOL = "hand-lifecycle";
@@ -605,6 +606,70 @@ async function executeBundledHandRun(input: {
               signalSessionId: healthReport.signalSessionId,
               unavailableCount: healthReport.unavailableCount,
               unknownCount: healthReport.unknownCount
+            }
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "nexus-broadcaster-hand") {
+      const result = await runKnowledgeBroadcaster(sandboxedEnv, input.timestamp);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} distilled ${result.distilledCount} universal pattern(s) and skipped ${result.skippedCount} duplicates.`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          distilledCount: result.distilledCount,
+          skippedCount: result.skippedCount,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} distilled ${result.distilledCount} pattern(s).`,
+            extra: {
+              cron: input.cron,
+              distilledCount: result.distilledCount,
+              skippedCount: result.skippedCount
+            }
+          })
+        }
+      });
+      return;
+    }
+
+    if (input.definition.implementation === "nexus-subscriber-hand") {
+      const result = await runKnowledgeSubscriber(sandboxedEnv, input.timestamp);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `${input.definition.label} ingested ${result.ingestedCount} global pattern(s) and asserted ${result.signalsAsserted} local synthesis signal(s).`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          handId: input.definition.id,
+          ingestedCount: result.ingestedCount,
+          signalsAsserted: result.signalsAsserted,
+          status: "succeeded",
+          audit: buildToolAuditRecord({
+            toolId: "hand-run",
+            actor: "hand-runtime",
+            scope: "hand",
+            outcome: "succeeded",
+            timestamp: input.timestamp,
+            handId: input.definition.id,
+            detail: `${input.definition.label} ingested ${result.ingestedCount} pattern(s).`,
+            extra: {
+              cron: input.cron,
+              ingestedCount: result.ingestedCount,
+              signalsAsserted: result.signalsAsserted
             }
           })
         }
