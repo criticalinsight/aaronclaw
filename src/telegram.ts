@@ -28,10 +28,55 @@ export interface TelegramMessage {
 export interface TelegramUpdate {
   updateId: number | null;
   message: TelegramMessage | null;
+  callbackQuery?: {
+    id: string;
+    from: TelegramUser;
+    message?: TelegramMessage;
+    data?: string;
+  } | null;
+}
+
+export interface TelegramInlineKeyboardButton {
+  text: string;
+  callback_data?: string;
+  url?: string;
+}
+
+export interface TelegramInlineKeyboardMarkup {
+  inline_keyboard: TelegramInlineKeyboardButton[][];
 }
 
 const TELEGRAM_MAX_MESSAGE_LENGTH = 4000;
 const TELEGRAM_PREFERRED_SPLIT_DELIMITERS = ["\n\n", "\n", ". ", "? ", "! ", "; ", ": ", ", ", " "];
+
+export const SCHEMATIC_EMOJIS = {
+  WIZARD: "🧙🏾‍♂️",
+  PULSE: "⚡",
+  SEARCH: "🔍",
+  HAND: "✋",
+  STATUS: "📊",
+  AUDIT: "📋",
+  ECONOMOS: "💰",
+  SOPHIA: "🧠",
+  REBALANCE: "⚖️",
+  HEALTHY: "✅",
+  WARNING: "⚠️",
+  ERROR: "❌",
+  ORBIT: "🛰️",
+  SOVEREIGN: "🏛️",
+  FACTORY: "🏭",
+  REFRESH: "🔄",
+  SUCCESS: "✅",
+  FAILURE: "❌"
+};
+
+/**
+ * Escapes characters for Telegram MarkdownV2 compliance.
+ * See: https://core.telegram.org/bots/api#markdownv2-style
+ */
+export function escapeMarkdown(text: string): string {
+  return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, "\\$&");
+}
 
 type TelegramSendMessageResponse = {
   description?: string;
@@ -64,7 +109,13 @@ export function parseTelegramUpdate(value: unknown): TelegramUpdate | null {
 
   return {
     updateId: asNumber(object.update_id),
-    message: parseTelegramMessage(object.message) ?? parseTelegramMessage(object.edited_message)
+    message: parseTelegramMessage(object.message) ?? parseTelegramMessage(object.edited_message),
+    callbackQuery: object.callback_query ? {
+      id: asString(asObject(object.callback_query)?.id) ?? "",
+      from: parseTelegramUser(asObject(object.callback_query)?.from)!,
+      message: parseTelegramMessage(asObject(object.callback_query)?.message) ?? undefined,
+      data: asString(asObject(object.callback_query)?.data)
+    } : null
   };
 }
 
@@ -93,8 +144,10 @@ export function buildTelegramMessageMetadata(update: TelegramUpdate, message: Te
 export async function sendTelegramReply(input: {
   env: Env;
   chatId: number;
-  replyToMessageId: number;
+  replyToMessageId?: number;
   text: string;
+  parseMode?: "MarkdownV2" | "HTML";
+  replyMarkup?: TelegramInlineKeyboardMarkup;
 }): Promise<void> {
   const token = input.env.TELEGRAM_BOT_TOKEN?.trim();
 
@@ -109,7 +162,9 @@ export async function sendTelegramReply(input: {
       token,
       chatId: input.chatId,
       replyToMessageId,
-      text: chunk
+      text: chunk,
+      parseMode: input.parseMode,
+      replyMarkup: input.replyMarkup
     });
 
     replyToMessageId = payload.result?.message_id ?? replyToMessageId;
@@ -119,8 +174,10 @@ export async function sendTelegramReply(input: {
 async function sendTelegramMessage(input: {
   token: string;
   chatId: number;
-  replyToMessageId: number;
+  replyToMessageId?: number;
   text: string;
+  parseMode?: "MarkdownV2" | "HTML";
+  replyMarkup?: TelegramInlineKeyboardMarkup;
 }): Promise<TelegramSendMessageResponse> {
   const response = await fetch(`https://api.telegram.org/bot${input.token}/sendMessage`, {
     method: "POST",
@@ -131,7 +188,9 @@ async function sendTelegramMessage(input: {
       chat_id: input.chatId,
       text: input.text,
       reply_to_message_id: input.replyToMessageId,
-      allow_sending_without_reply: true
+      allow_sending_without_reply: true,
+      parse_mode: input.parseMode,
+      reply_markup: input.replyMarkup
     })
   });
 
@@ -211,15 +270,19 @@ function parseTelegramMessage(value: unknown): TelegramMessage | null {
       firstName: asString(chat.first_name),
       lastName: asString(chat.last_name)
     },
-    from: from
-      ? {
-          id: asNumber(from.id) ?? 0,
-          isBot: Boolean(from.is_bot),
-          username: asString(from.username),
-          firstName: asString(from.first_name),
-          lastName: asString(from.last_name)
-        }
-      : null
+    from: parseTelegramUser(from)
+  };
+}
+
+function parseTelegramUser(value: unknown): TelegramUser | null {
+  const from = asObject(value);
+  if (!from) return null;
+  return {
+    id: asNumber(from.id) ?? 0,
+    isBot: Boolean(from.is_bot),
+    username: asString(from.username),
+    firstName: asString(from.first_name),
+    lastName: asString(from.last_name)
   };
 }
 

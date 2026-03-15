@@ -37,12 +37,14 @@ import {
 import { SessionRuntime } from "./session-runtime";
 import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
 import {
-  buildTelegramMessageMetadata,
-  buildTelegramSessionId,
+  parseTelegramUpdate,
+  sendTelegramReply,
+  SCHEMATIC_EMOJIS,
+  escapeMarkdown,
   isTelegramConfigured,
   isTelegramWebhookAuthorized,
-  parseTelegramUpdate,
-  sendTelegramReply
+  buildTelegramSessionId,
+  buildTelegramMessageMetadata
 } from "./telegram";
 import { discoverResources, generateWranglerConfig } from "./wiring-engine";
 import { createGithubRepository, pushFilesToGithub, setupGithubActions } from "./github-coordinator";
@@ -495,6 +497,22 @@ async function handleTelegramWebhook(request: Request, env: Env, ctx?: Execution
     return json({ error: "invalid telegram update" }, 400);
   }
 
+  // Handle Callback Queries (Buttons)
+  if (update.callbackQuery) {
+    const data = update.callbackQuery.data;
+    const chatId = update.callbackQuery.message?.chat.id;
+    if (chatId && data) {
+        await handleTelegramCommand({
+            env,
+            ctx,
+            chatId,
+            messageId: update.callbackQuery.message?.messageId,
+            data
+        });
+    }
+    return json({ ok: true });
+  }
+
   if (!update.message) {
     return json({ ok: true, ignored: "unsupported-update" });
   }
@@ -505,51 +523,27 @@ async function handleTelegramWebhook(request: Request, env: Env, ctx?: Execution
 
   const content = update.message.text?.trim();
 
-  if (content?.startsWith("/site ")) {
-    const prompt = content.slice(6).trim();
-    const sessionId = buildTelegramSessionId(update.message);
-    const chatId = update.message.chat.id;
-    const messageId = update.message.messageId;
-
-    const task = (async () => {
-        try {
-            await triggerBundledHandRunManual({
-                env,
-                handId: "website-factory",
-                input: { prompt, name: `site-${sessionId.slice(0, 8)}`, sessionId }
-            });
-            
-            // We'll need a way to notify the user of the URL.
-            // For now, it's logged. In a real system, we'd send another Telegram message here.
-            // Let's add that.
-            await sendTelegramReply({
-                env,
-                chatId,
-                replyToMessageId: messageId,
-                text: `🧙🏾‍♂️ Your website is ready! It will be live shortly at https://site-${sessionId.slice(0, 8)}.workers.dev (DNS propagation may take a minute).`
-            });
-        } catch (e) {
-            console.error("Website factory triggered via Telegram failed:", e);
-            await sendTelegramReply({
-                env,
-                chatId,
-                replyToMessageId: messageId,
-                text: `❌ Synthesis failed: ${e instanceof Error ? e.message : String(e)}`
-            });
-        }
-    })();
-
-    if (ctx) {
-        ctx.waitUntil(task);
-    }
-
-    return json({ ok: true });
-  }
-
   if (!content) {
     return json({ ok: true, ignored: "non-text-message" });
   }
 
+  // 🧙🏾‍♂️ Dispatcher
+  if (content.startsWith("/")) {
+    const [command, ...argList] = content.split(" ");
+    const args = argList.join(" ");
+
+    await handleTelegramCommand({
+      env,
+      ctx,
+      chatId: update.message.chat.id,
+      messageId: update.message.messageId,
+      command,
+      args
+    });
+    return json({ ok: true });
+  }
+
+  // Default: Fallback to session chat
   const sessionId = buildTelegramSessionId(update.message);
   const stub = getSessionStub(env, sessionId);
 
@@ -592,6 +586,168 @@ async function handleTelegramWebhook(request: Request, env: Env, ctx?: Execution
     console.error("telegram webhook handling failed", error);
     return json({ error: "telegram webhook handling failed" }, 502);
   }
+}
+
+async function handleTelegramCommand(input: {
+  env: Env;
+  ctx?: ExecutionContext;
+  chatId: number;
+  messageId?: number;
+  command?: string;
+  args?: string;
+  data?: string;
+}): Promise<void> {
+    const { env, ctx, chatId, messageId, command, args, data } = input;
+
+    const reply = async (text: string, options: { parseMode?: "MarkdownV2" | "HTML", replyMarkup?: any } = {}) => {
+        await sendTelegramReply({
+            env,
+            chatId,
+            replyToMessageId: messageId,
+            text,
+            ...options
+        });
+    };
+
+    try {
+        // 🧙🏾‍♂️ Welcome & Quick Actions
+        if (command === "/start") {
+            await reply(`${SCHEMATIC_EMOJIS.WIZARD} *AaronClaw Software Factory Online*\n\nWelcome\\. I am your autonomous architect\\. Use the buttons below for quick tactical awareness or send a command to begin synthesis\\.`, {
+                parseMode: "MarkdownV2",
+                replyMarkup: {
+                    inline_keyboard: [
+                        [
+                            { text: `${SCHEMATIC_EMOJIS.STATUS} Status`, callback_data: "cmd_status" },
+                            { text: `${SCHEMATIC_EMOJIS.HAND} Hands`, callback_data: "cmd_hands" }
+                        ],
+                        [
+                            { text: `${SCHEMATIC_EMOJIS.AUDIT} Audit`, callback_data: "cmd_audit" }
+                        ]
+                    ]
+                }
+            });
+            return;
+        }
+
+        // 🧙🏾‍♂️ Status: Multi-Engine Orbit Analysis
+        if (command === "/status" || data === "cmd_status") {
+            const { getSovereignMetrics } = await import("./sovereign-engine");
+            const { getEconomosMetrics } = await import("./economos-engine");
+            const { getSwarmStatus } = await import("./aeturnus-engine");
+
+            const [sovereign, economos, swarm] = await Promise.all([
+                getSovereignMetrics(env, false),
+                getEconomosMetrics(env),
+                getSwarmStatus(env)
+            ]);
+
+            const text = [
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.ORBIT)} AARONCLAW SYSTEM STATUS*`,
+                "",
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.SOVEREIGN)} Sovereign Hub:*`,
+                `• Nodes: ${sovereign.nodes} \\(${sovereign.unhealthyNodes} degraded\\)`,
+                "",
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.ECONOMOS)} Economos Core:*`,
+                `• Efficiency: ${economos.overallEfficiencyScore}%`,
+                `• Stateful Places: ${economos.totalStatefulPlaces}`,
+                "",
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.FACTORY)} Aeturnus Swarm:*`,
+                `• Health: ${swarm.overallHealth}%`,
+                `• Active Nodes: ${swarm.activeNodes.length}`,
+                "",
+                `_Generated at ${escapeMarkdown(new Date().toISOString())}_`
+            ].join("\n");
+
+            await reply(text, {
+                parseMode: "MarkdownV2",
+                replyMarkup: {
+                    inline_keyboard: [
+                        [{ text: `${SCHEMATIC_EMOJIS.REFRESH} Refresh`, callback_data: "cmd_status" }]
+                    ]
+                }
+            });
+            return;
+        }
+
+        // 🧙🏾‍♂️ Hands: Tactical Lifecycle Management
+        if (command === "/hands" || data === "cmd_hands") {
+            const { listBundledHands } = await import("./hands-runtime");
+            const hands = await listBundledHands({ env });
+
+            const text = [
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.HAND)} HANDS INVENTORY:*`,
+                "",
+                ...hands.map((h, i) => {
+                    const emoji = h.status === "active" ? SCHEMATIC_EMOJIS.PULSE : "⏸";
+                    const schedule = h.scheduleCrons.join(", ");
+                    return `*${i + 1}\\. ${escapeMarkdown(h.label)}* ${emoji}\n• Schedule: \`${escapeMarkdown(schedule)}\``;
+                }),
+                "",
+                `_Total Bundled Hands: ${hands.length}_`
+            ].join("\n");
+
+            await reply(text, {
+                parseMode: "MarkdownV2",
+                replyMarkup: {
+                    inline_keyboard: [
+                        [{ text: `${SCHEMATIC_EMOJIS.REFRESH} Refresh`, callback_data: "cmd_hands" }]
+                    ]
+                }
+            });
+            return;
+        }
+
+        // 🧙🏾‍♂️ Audit: Telemetric Fact Verification
+        if (command === "/audit" || data === "cmd_audit") {
+            const { runTelemetricAudit } = await import("./reflection-engine");
+            const audit = await runTelemetricAudit({ env, cron: "manual" });
+
+            const text = [
+                `*${escapeMarkdown(SCHEMATIC_EMOJIS.AUDIT)} TELEMETRIC AUDIT:*`,
+                "",
+                `• Managed Projects: ${audit.managedProjectCount}`,
+                `• Received Pulses: ${audit.receivedPulseCount}`,
+                `• Generated Proposals: ${audit.generatedProposalCount}`,
+                "",
+                `_Session ID: \`${escapeMarkdown(audit.auditSessionId)}\`_`
+            ].join("\n");
+
+            await reply(text, { parseMode: "MarkdownV2" });
+            return;
+        }
+
+        // 🧙🏾‍♂️ Factory Site
+        if (command === "/site") {
+            if (!args) {
+                await reply(`${SCHEMATIC_EMOJIS.WARNING} Please provide a prompt: \`/site a landing page\``, { parseMode: "MarkdownV2" });
+                return;
+            }
+
+            const siteTask = (async () => {
+                try {
+                    const { triggerBundledHandRunManual } = await import("./hands-runtime");
+                    await triggerBundledHandRunManual({
+                        env,
+                        handId: "website-factory",
+                        input: { prompt: args, name: `tg-site-${chatId}`, sessionId: `telegram:site:${chatId}` }
+                    });
+                    await reply(`${SCHEMATIC_EMOJIS.SUCCESS} Website synthesis complete\\! Check your dashboard\\.`, { parseMode: "MarkdownV2" });
+                } catch (e: any) {
+                    await reply(`${SCHEMATIC_EMOJIS.FAILURE} Synthesis failed: ${escapeMarkdown(e.message)}`, { parseMode: "MarkdownV2" });
+                }
+            })();
+            if (ctx) ctx.waitUntil(siteTask);
+            return;
+        }
+
+        // 🧙🏾‍♂️ Unknown Command
+        if (command) {
+            await reply(`${SCHEMATIC_EMOJIS.FAILURE} *Command not recognized:* ${escapeMarkdown(command)}\n\nUse /start to see available factory operations\\.`, { parseMode: "MarkdownV2" });
+        }
+    } catch (error: any) {
+        console.error("Telegram Command Error:", error);
+        await reply(`${SCHEMATIC_EMOJIS.FAILURE} *Operational Failure:* ${escapeMarkdown(error.message)}`, { parseMode: "MarkdownV2" });
+    }
 }
 
 async function buildModelSelectionPayload(env: Env, request?: Request) {
