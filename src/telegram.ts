@@ -171,6 +171,46 @@ export async function sendTelegramReply(input: {
   }
 }
 
+/**
+ * Sends a push notification to the configured administrator chat.
+ */
+export async function broadcastTelegramMessage(input: {
+  env: Env;
+  text: string;
+  parseMode?: "MarkdownV2" | "HTML";
+  replyMarkup?: TelegramInlineKeyboardMarkup;
+}): Promise<void> {
+  const token = input.env.TELEGRAM_BOT_TOKEN?.trim();
+  const adminChatId = input.env.TELEGRAM_ADMIN_CHAT_ID;
+
+  if (!token) {
+    console.warn("telegram bot token is not configured, skipping broadcast");
+    return;
+  }
+
+  if (!adminChatId) {
+    console.warn("TELEGRAM_ADMIN_CHAT_ID is not configured, skipping broadcast");
+    return;
+  }
+
+  const chatId = typeof adminChatId === "string" ? parseInt(adminChatId, 10) : adminChatId;
+
+  if (isNaN(chatId)) {
+    console.warn("TELEGRAM_ADMIN_CHAT_ID is invalid, skipping broadcast");
+    return;
+  }
+
+  for (const chunk of splitTelegramReplyText(input.text)) {
+    await sendTelegramMessage({
+      token,
+      chatId,
+      text: chunk,
+      parseMode: input.parseMode,
+      replyMarkup: input.replyMarkup
+    });
+  }
+}
+
 async function sendTelegramMessage(input: {
   token: string;
   chatId: number;

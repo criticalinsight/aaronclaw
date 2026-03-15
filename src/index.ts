@@ -32,13 +32,15 @@ import {
   readImprovementProposalState, 
   recordImprovementLifecycleAction,
   resolveFactsAsOf,
-  runTelemetricAudit
+  runTelemetricAudit,
+  runScheduledMaintenance
 } from "./reflection-engine";
 import { SessionRuntime } from "./session-runtime";
 import { listBundledSkills, readBundledSkillManifest } from "./skills-runtime";
 import {
   parseTelegramUpdate,
   sendTelegramReply,
+  broadcastTelegramMessage,
   SCHEMATIC_EMOJIS,
   escapeMarkdown,
   isTelegramConfigured,
@@ -1355,16 +1357,44 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: Env): Promise<void> {
     try {
+      const timestamp = new Date(controller.scheduledTime).toISOString();
       await runScheduledHands({
         env,
         cron: controller.cron,
-        timestamp: new Date(controller.scheduledTime).toISOString()
+        timestamp
       });
       await runTelemetricAudit({
         env,
         cron: controller.cron,
-        timestamp: new Date(controller.scheduledTime).toISOString()
+        timestamp
       });
+      const maintenance = await runScheduledMaintenance({
+        env,
+        cron: controller.cron,
+        timestamp
+      });
+
+      if (isTelegramConfigured(env)) {
+        const reflectedCount = maintenance.reflectedSessionIds.length;
+        const reviewedCount = maintenance.reviewedSessionIds.length;
+        const emoji = SCHEMATIC_EMOJIS.WIZARD;
+        const pulse = SCHEMATIC_EMOJIS.PULSE;
+        
+        let message = `${emoji} *Tactical Maintenance Complete*\n\n`;
+        message += `${pulse} Cron: \`${controller.cron}\`\n`;
+        message += `🔍 Reviewed: ${reviewedCount} sessions\n`;
+        message += `✨ Reflected: ${reflectedCount} fresh insights\n\n`;
+        
+        if (reflectedCount > 0) {
+          message += `Latest Focus: \`${maintenance.reflectedSessionIds[0].slice(0, 8)}\`\n`;
+        }
+
+        await broadcastTelegramMessage({
+          env,
+          text: message,
+          parseMode: "MarkdownV2"
+        });
+      }
     } catch (error) {
       console.error("scheduled maintenance failed", error);
     }

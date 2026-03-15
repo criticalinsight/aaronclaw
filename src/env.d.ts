@@ -44,6 +44,7 @@ interface Env {
   DB?: D1Database;
   SESSION_RUNTIME: DurableObjectNamespace;
   TELEGRAM_BOT_TOKEN?: string;
+  TELEGRAM_ADMIN_CHAT_ID?: string | number;
   TELEGRAM_WEBHOOK_SECRET?: string;
   GITHUB_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
