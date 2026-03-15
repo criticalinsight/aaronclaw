@@ -10,7 +10,8 @@ export type ModelAvailabilityStatus =
   | "configured-but-unavailable";
 export type ModelSelectionFallbackReason =
   | "requested-model-unknown"
-  | "requested-model-unavailable";
+  | "requested-model-unavailable"
+  | "bootstrap-failure";
 
 export interface ModelRegistryEntry {
   id: string;

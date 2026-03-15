@@ -23,9 +23,7 @@ export function evaluateDemiurgeAccess(
       if (rule.denyRoles?.includes(role)) {
         return false;
       }
-      if (rule.allowRoles.includes(role) || rule.allowRoles.includes("*")) {
-        return true;
-      }
+      return rule.allowRoles.includes(role) || rule.allowRoles.includes("*");
     }
   }
 

@@ -29,7 +29,7 @@ import {
   setPersistedModelSelection
 } from "./model-selection-store";
 import {
-  readImprovementProposalState, 
+  readImprovementProposalState,
   recordImprovementLifecycleAction,
   resolveFactsAsOf,
   runTelemetricAudit,
@@ -504,15 +504,16 @@ async function handleTelegramWebhook(request: Request, env: Env, ctx?: Execution
     const data = update.callbackQuery.data;
     const chatId = update.callbackQuery.message?.chat.id;
     if (chatId && data) {
-        await handleTelegramCommand({
-            env,
-            ctx,
-            chatId,
-            messageId: update.callbackQuery.message?.messageId,
-            data
-        });
+      await handleTelegramCommand({
+        env,
+        ctx,
+        chatId,
+        messageId: update.callbackQuery.message?.messageId,
+        data
+      });
+      return json({ ok: true });
     }
-    return json({ ok: true });
+    return json({ ok: true, ignored: "unsupported-update" });
   }
 
   if (!update.message) {
@@ -1111,7 +1112,24 @@ export { SessionRuntime };
 export default {
   async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
-    const runtimeOptions = await buildRuntimeOptions(env);
+    
+    let runtimeOptions: Awaited<ReturnType<typeof buildRuntimeOptions>>;
+    try {
+      runtimeOptions = await buildRuntimeOptions(env);
+    } catch (err) {
+      console.error("Critical failure during runtime initialization:", err);
+      // Fallback for bootstrap failures (e.g. missing AARONDB table)
+      runtimeOptions = {
+        authRequired: isAuthConfigured(env),
+        defaultProvider: null,
+        defaultModel: null,
+        activeProvider: null,
+        activeModel: null,
+        selectionFallbackReason: "bootstrap-failure",
+        hasAiBinding: Boolean(env.AI)
+      };
+    }
+
     const status = buildRuntimeStatus(runtimeOptions);
     const isHeadRequest = request.method === "HEAD";
 
@@ -1363,40 +1381,8 @@ export default {
         cron: controller.cron,
         timestamp
       });
-      await runTelemetricAudit({
-        env,
-        cron: controller.cron,
-        timestamp
-      });
-      const maintenance = await runScheduledMaintenance({
-        env,
-        cron: controller.cron,
-        timestamp
-      });
-
-      if (isTelegramConfigured(env)) {
-        const reflectedCount = maintenance.reflectedSessionIds.length;
-        const reviewedCount = maintenance.reviewedSessionIds.length;
-        const emoji = SCHEMATIC_EMOJIS.WIZARD;
-        const pulse = SCHEMATIC_EMOJIS.PULSE;
-        
-        let message = `${emoji} *Tactical Maintenance Complete*\n\n`;
-        message += `${pulse} Cron: \`${controller.cron}\`\n`;
-        message += `🔍 Reviewed: ${reviewedCount} sessions\n`;
-        message += `✨ Reflected: ${reflectedCount} fresh insights\n\n`;
-        
-        if (reflectedCount > 0) {
-          message += `Latest Focus: \`${maintenance.reflectedSessionIds[0].slice(0, 8)}\`\n`;
-        }
-
-        await broadcastTelegramMessage({
-          env,
-          text: message,
-          parseMode: "MarkdownV2"
-        });
-      }
-    } catch (error) {
-      console.error("scheduled maintenance failed", error);
+    } catch (err) {
+      console.error("Scheduled task failed:", err);
     }
   }
 };

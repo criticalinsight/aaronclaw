@@ -12,10 +12,13 @@ import {
   runReflexiveAudit,
   runAutonomousEvolution,
   runSyntheticReflectionLoop,
+  runTelemetricAudit,
   scheduledMaintenanceCrons,
   type ReflexiveAuditResult
 } from "./reflection-engine";
 import { runScheduledDocsDriftReview, type DocsDriftFinding } from "./docs-drift";
+import { initiateSelfHealing } from "./aeturnus-engine";
+import { rebalanceInfrastructure } from "./sovereign-engine";
 import { runProviderHealthWatchdog, type ProviderHealthFinding } from "./provider-health-watchdog";
 import { mountAaronDbEdgeSessionRuntime } from "./aarondb-edge-substrate";
 import { type AssistantProviderRoute, generateAssistantReply } from "./assistant";
@@ -303,16 +306,27 @@ async function executeBundledHandRun(input: {
 
   try {
     if (input.definition.implementation === "scheduled-maintenance") {
+      await runTelemetricAudit({
+        env: sandboxedEnv,
+        cron: input.cron,
+        timestamp: input.timestamp
+      });
       const maintenance = await runScheduledMaintenance({
         env: sandboxedEnv,
         cron: input.cron,
         timestamp: input.timestamp
       });
 
+      // 🧙🏾‍♂️ Autonomous Self-Healing (Aeturnus)
+      const healing = await initiateSelfHealing(sandboxedEnv);
+
+      // 🧙🏾‍♂️ Infrastructure Rebalancing (Sovereign)
+      const rebalance = await rebalanceInfrastructure(sandboxedEnv, new Map());
+
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
-        summary: `${input.definition.label} ran for cron ${input.cron} and reused the scheduled maintenance path.`,
+        summary: `${input.definition.label} ran for cron ${input.cron}. Reviewed ${maintenance.reviewedSessionIds.length} sessions, reflected ${maintenance.reflectedSessionIds.length} insights. Healing: ${healing.recoveredNodes.length} nodes recovered. Infrastructure: ${rebalance.status}.`,
         metadata: {
           action: "run",
           cron: input.cron,
@@ -320,6 +334,8 @@ async function executeBundledHandRun(input: {
           maintenanceSessionId: maintenance.maintenanceSessionId,
           reflectedSessionCount: maintenance.reflectedSessionIds.length,
           reviewedSessionCount: maintenance.reviewedSessionIds.length,
+          recoveredNodeCount: healing.recoveredNodes.length,
+          infrastructureStatus: rebalance.status,
           status: "succeeded",
           audit: buildToolAuditRecord({
             toolId: "hand-run",
@@ -333,7 +349,9 @@ async function executeBundledHandRun(input: {
               cron: input.cron,
               maintenanceSessionId: maintenance.maintenanceSessionId,
               reflectedSessionCount: maintenance.reflectedSessionIds.length,
-              reviewedSessionCount: maintenance.reviewedSessionIds.length
+              reviewedSessionCount: maintenance.reviewedSessionIds.length,
+              recoveredNodes: healing.recoveredNodes,
+              rebalanceStatus: rebalance.status
             }
           })
         }
