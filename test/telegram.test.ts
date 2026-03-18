@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { sendTelegramReply } from "../src/telegram";
+
+let originalFetch: typeof globalThis.fetch;
 
 function buildTelegramResponse(messageId: number) {
   return new Response(JSON.stringify({ ok: true, result: { message_id: messageId } }), {
@@ -10,7 +12,13 @@ function buildTelegramResponse(messageId: number) {
 
 describe("sendTelegramReply", () => {
   afterEach(() => {
+    vi.clearAllMocks();
     vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
+  });
+
+  beforeAll(() => {
+    originalFetch = globalThis.fetch;
   });
 
   it("keeps short replies as a single trimmed Telegram message", async () => {

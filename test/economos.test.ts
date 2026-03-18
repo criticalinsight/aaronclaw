@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { auditEfficiency, auditManagedProjects, canRunCrucible, EconomosMetrics } from "../src/economos-engine";
 import * as economosEngine from "../src/economos-engine";
+import { afterEach } from "vitest";
 
 describe("economos-engine", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("auditEfficiency", () => {
     it("returns optimal metrics for a very lean state", async () => {
       const state = new Map([

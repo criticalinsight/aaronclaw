@@ -12,7 +12,7 @@ AaronClaw deploys as one Worker with:
 - a Vectorize binding named `VECTOR_INDEX` for the knowledge-vault path
 - cron triggers for the bundled hands runtime (`*/30 * * * *` and `0 8 * * *`)
 
-The checked-in `wrangler.jsonc` stays local-first. Real deploys inject the remoteD1 UUID into `.wrangler/deploy/wrangler.jsonc` through `npm run deploy:prep`.
+The checked-in `wrangler.jsonc` stays local-first. Real deploys inject the remote D1 UUID into `.wrangler/deploy/wrangler.jsonc` through `bun run deploy:prep`.
 
 The current checked-in config expects the knowledge-vault index name`aaronclaw-knowledge-vault`. If Vectorize is unavailable, the session runtimedegrades to D1-compatible vault ranking instead of breaking chat, but the liveproduction posture now assumes the binding is present.
 
@@ -99,7 +99,7 @@ manual Wrangler deploy sequence.
 ### 1. Validate the checked-in config
 
 ```sh
-npm run validate:config
+bun run validate:config
 ```
 
 This confirms the repo still has the expected Worker name, D1 binding, DurableObject binding, local preview database ID, and placeholder remote database ID.
@@ -190,7 +190,7 @@ keep the upstream secret header aligned with the Worker.
 ### 5. Generate the deploy config
 
 ```sh
-npm run deploy:prep
+bun run deploy:prep
 ```
 
 This writes `.wrangler/deploy/wrangler.jsonc` with the real remote D1 UUID.
@@ -198,7 +198,7 @@ This writes `.wrangler/deploy/wrangler.jsonc` with the real remote D1 UUID.
 ### 6. Dry-run the deploy
 
 ```sh
-npm run deploy:dry-run
+bun run deploy:dry-run
 ```
 
 This command uses the generated deploy config and is the safest way to catch bad
@@ -207,7 +207,7 @@ binding or config assumptions before a real deploy.
 ### 7. Deploy
 
 ```sh
-npm run deploy
+bun run deploy
 ```
 
 ## Current live posture
@@ -286,8 +286,8 @@ That exact flow is what the current live deployment was verified against.
 
 | Symptom | Likely cause | What to check |
 | --- | --- | --- |
-| npm run validate:config fails | wrangler.jsonc drifted from the expected binding names or local-first D1 shape | Restore SESSION_RUNTIME, AARONDB, preview_database_id: aaronclaw-local, and the placeholder database_id in the checked-in config |
-| npm run deploy:prep fails immediately | AARONCLAW_D1_DATABASE_ID is missing or malformed | Export a real D1 UUID before running the command |
+| bun run validate:config fails | wrangler.jsonc drifted from the expected binding names or local-first D1 shape | Restore SESSION_RUNTIME, AARONDB, preview_database_id: aaronclaw-local, and the placeholder database_id in the checked-in config |
+| bun run deploy:prep fails immediately | AARONCLAW_D1_DATABASE_ID is missing or malformed | Export a real D1 UUID before running the command |
 | /api/* returns 401 | APP_AUTH_TOKEN is configured | Send Authorization: Bearer <APP_AUTH_TOKEN> or paste the token into the landing page |
 | /api/key returns 412 | APP_AUTH_TOKEN is not configured | Set APP_AUTH_TOKEN first; protected key storage derives encryption from that token |
 | /telegram/webhook returns 503 | TELEGRAM_BOT_TOKEN is not configured in Worker secrets | Add TELEGRAM_BOT_TOKEN as a Worker secret with wrangler secret put TELEGRAM_BOT_TOKEN |

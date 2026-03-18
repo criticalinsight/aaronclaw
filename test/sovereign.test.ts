@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { 
   auditInfrastructureDrift, 
   rebalanceInfrastructure, 
@@ -6,12 +6,10 @@ import {
 } from '../src/sovereign-engine';
 import * as WiringEngine from '../src/wiring-engine';
 
-vi.mock('../src/wiring-engine', () => ({
-  discoverResources: vi.fn(),
-  generateWranglerConfig: vi.fn()
-}));
-
 describe('Sovereign: Infrastructural Self-Assembly', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const mockEnv = {};
   const mockCurrentState = new Map<string, Map<string, any>>([
     ['domain:inventory', new Map<string, any>([['status', 'active']])]
@@ -19,7 +17,7 @@ describe('Sovereign: Infrastructural Self-Assembly', () => {
 
   it('should detect drift if a domain has no matching D1 substrate', async () => {
     // Mock discoverResources to return NO D1 bindings
-    vi.mocked(WiringEngine.discoverResources).mockReturnValue({
+    vi.spyOn(WiringEngine, "discoverResources").mockReturnValue({
       d1: [],
       kv: [],
       vectorize: [],
@@ -32,7 +30,7 @@ describe('Sovereign: Infrastructural Self-Assembly', () => {
 
   it('should NOT detect drift if all domains have matching D1 substrate', async () => {
     // Mock discoverResources to return a matching D1 binding
-    vi.mocked(WiringEngine.discoverResources).mockReturnValue({
+    vi.spyOn(WiringEngine, "discoverResources").mockReturnValue({
       d1: ['aaronclaw-d1-inventory'],
       kv: [],
       vectorize: [],
@@ -44,7 +42,7 @@ describe('Sovereign: Infrastructural Self-Assembly', () => {
   });
 
   it('should trigger rebalancing when drift is detected', async () => {
-    vi.mocked(WiringEngine.discoverResources).mockReturnValue({
+    vi.spyOn(WiringEngine, "discoverResources").mockReturnValue({
       d1: [],
       kv: [],
       vectorize: [],
@@ -58,7 +56,7 @@ describe('Sovereign: Infrastructural Self-Assembly', () => {
   });
 
   it('should return stable status if no drift is detected', async () => {
-    vi.mocked(WiringEngine.discoverResources).mockReturnValue({
+    vi.spyOn(WiringEngine, "discoverResources").mockReturnValue({
       d1: ['aaronclaw-d1-inventory'],
       kv: [],
       vectorize: [],
@@ -70,7 +68,7 @@ describe('Sovereign: Infrastructural Self-Assembly', () => {
   });
 
   it('should calculate sovereign metrics correctly', () => {
-    vi.mocked(WiringEngine.discoverResources).mockReturnValue({
+    vi.spyOn(WiringEngine, "discoverResources").mockReturnValue({
       d1: ['d1-1', 'd1-2'],
       kv: ['kv-1'],
       vectorize: [],

@@ -1,17 +1,18 @@
 {
   "name": "aaronclaw",
   "version": "1.0.0",
+  "packageManager": "bun@1.2.4",
   "description": "Cloudflare-native OpenClaw bootstrap with a Durable Object seam for AaronDB Edge.",
   "scripts": {
-    "test": "vitest run",
-    "dev": "wrangler dev",
-    "validate:config": "node scripts/validate-config.mjs",
-    "deploy:prep": "node scripts/render-deploy-config.mjs",
-    "deploy:dry-run": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc --dry-run",
-    "deploy": "npm run deploy:prep && wrangler deploy --config .wrangler/deploy/wrangler.jsonc",
-    "typecheck": "npx tsc --noEmit",
-    "check": "npm run typecheck && npm run test",
-    "architectura": "npx tsx scripts/architectura-loop.ts"
+    "test": "bun test",
+    "dev": "bun run wrangler dev",
+    "validate:config": "bun scripts/validate-config.mjs",
+    "deploy:prep": "bun scripts/render-deploy-config.mjs",
+    "deploy:dry-run": "bun run deploy:prep && bun run wrangler deploy --config .wrangler/deploy/wrangler.jsonc --dry-run",
+    "deploy": "bun run deploy:prep && bun run wrangler deploy --config .wrangler/deploy/wrangler.jsonc",
+    "typecheck": "bun x tsc --noEmit",
+    "check": "bun run typecheck && bun run test",
+    "architectura": "bun scripts/architectura-loop.ts"
   },
   "keywords": [],
   "author": "",
@@ -28,5 +29,11 @@
   },
   "overrides": {
     "undici": "^7.24.3"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.58",
+    "@cloudflare/codemode": "^0.2.0",
+    "ai": "^6.0.116",
+    "zod": "^4.3.6"
   }
 }

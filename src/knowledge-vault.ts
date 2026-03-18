@@ -385,11 +385,14 @@ function tokenize(value: string): string[] {
 }
 
 export async function buildSemanticVector(
-  ai: WorkersAiBinding,
+  ai: WorkersAiBinding | undefined | null,
   text: string,
   model: string = KNOWLEDGE_VAULT_MODEL
 ): Promise<number[]> {
   try {
+    if (!ai || typeof ai.run !== "function") {
+      throw new Error(`Workers AI is not available (model: ${model})`);
+    }
     const response = await ai.run(model, {
       text: [text]
     });

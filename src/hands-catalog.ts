@@ -6,6 +6,8 @@ const runKnowledgeSubscriber = runKnowledgeSubscriberImpl;
 import { runDemiurgeMetaHand } from "./hands/demiurge-meta-hand";
 import { runSovereignRebalanceHand } from "./hands/sovereign-rebalance-hand";
 import { runEthicsAlignmentHand } from "./hands/ethics-alignment-hand";
+import { runIsolateSentinelHand } from "./hands/isolate-sentinel-hand";
+import { runIsolateOnboardingHand } from "./hands/isolate-onboarding-hand";
 
 export type BundledHandImplementation =
   | "scheduled-maintenance"
@@ -54,7 +56,9 @@ export type BundledHandImplementation =
   | "nexus-subscriber-hand"
   | "demiurge-meta-hand"
   | "sovereign-rebalance"
-  | "ethics-alignment";
+  | "ethics-alignment"
+  | "isolate-sentinel"
+  | "isolate-onboarding";
 
 export type HandId =
   | "scheduled-maintenance"
@@ -100,19 +104,22 @@ export type HandId =
   | "nexus-subscriber"
   | "demiurge-meta-hand"
   | "sovereign-rebalance"
-  | "ethics-alignment";
+  | "ethics-alignment"
+  | "isolate-sentinel"
+  | "isolate-onboarding";
 
 export interface BundledHandDefinition {
   readonly id: HandId;
   readonly label: string;
   readonly description: string;
-  readonly runtime: "cloudflare-cron" | "cloudflare-native";
+  readonly runtime: "cloudflare-cron" | "cloudflare-native" | "manual";
   readonly scheduleCrons: readonly string[];
   readonly implementation: BundledHandImplementation;
-  readonly run?: (env: any, timestamp: string) => Promise<any>;
+  readonly run?: (env: any, input: any) => Promise<any>;
 }
 
 export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
+
   {
     id: "scheduled-maintenance",
     label: "Scheduled maintenance hand",
@@ -122,6 +129,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "scheduled-maintenance"
   },
+
   {
     id: "improvement-hand",
     label: "Improvement Hand",
@@ -131,6 +139,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "improvement-hand"
   },
+
   {
     id: "user-correction-miner",
     label: "User Correction Miner",
@@ -140,6 +149,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "user-correction-miner"
   },
+
   {
     id: "regression-watch",
     label: "Regression Watch",
@@ -149,6 +159,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "regression-watch"
   },
+
   {
     id: "provider-health-watchdog",
     label: "Provider health watchdog",
@@ -158,6 +169,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "provider-health-watchdog"
   },
+
   {
     id: "docs-drift",
     label: "Docs drift hand",
@@ -167,6 +179,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance, scheduledMaintenanceCrons.morningBriefing],
     implementation: "docs-drift"
   },
+
   {
     id: "ttl-garbage-collector",
     label: "TTL garbage collector",
@@ -175,6 +188,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "ttl-garbage-collector"
   },
+
   {
     id: "orphan-fact-cleanup",
     label: "Orphan fact cleanup",
@@ -183,6 +197,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "orphan-fact-cleanup"
   },
+
   {
     id: "vector-index-reconciler",
     label: "Vector index reconciler",
@@ -191,6 +206,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "vector-index-reconciler"
   },
+
   {
     id: "daily-briefing-generator",
     label: "Daily briefing generator",
@@ -199,6 +215,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "daily-briefing-generator"
   },
+
   {
     id: "github-coordinator",
     label: "GitHub Coordinator",
@@ -207,6 +224,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: ["0 0 * * *"],
     implementation: "github-coordinator"
   },
+
   {
     id: "docs-factory",
     label: "Documentation Factory",
@@ -215,6 +233,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: ["0 0 * * *"],
     implementation: "docs-factory"
   },
+
   {
     id: "error-cluster-detect",
     label: "Error cluster detector",
@@ -223,6 +242,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "error-cluster-detect"
   },
+
   {
     id: "credential-leak-watchdog",
     label: "Credential leak watchdog",
@@ -231,6 +251,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "credential-leak-watchdog"
   },
+
   {
     id: "usage-spike-analyzer",
     label: "Usage spike analyzer",
@@ -239,6 +260,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "usage-spike-analyzer"
   },
+
   {
     id: "latent-reflection-miner",
     label: "Latent reflection miner",
@@ -247,6 +269,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "latent-reflection-miner"
   },
+
   {
     id: "latency-anomaly-detector",
     label: "Latency anomaly detector",
@@ -255,6 +278,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "latency-anomaly-detector"
   },
+
   {
     id: "tool-performance-baseline",
     label: "Tool performance baseline",
@@ -263,6 +287,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "tool-performance-baseline"
   },
+
   {
     id: "stale-session-archiver",
     label: "Stale session archiver",
@@ -271,6 +296,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "stale-session-archiver"
   },
+
   {
     id: "active-session-prewarmer",
     label: "Active session prewarmer",
@@ -279,6 +305,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "active-session-prewarmer"
   },
+
   {
     id: "durable-object-storage-watch",
     label: "Durable Object storage watch",
@@ -287,6 +314,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "durable-object-storage-watch"
   },
+
   {
     id: "dependency-drifter",
     label: "Dependency drifter",
@@ -295,6 +323,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "dependency-drifter"
   },
+
   {
     id: "secret-rotation-check",
     label: "Secret rotation checker",
@@ -303,6 +332,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "secret-rotation-check"
   },
+
   {
     id: "audit-log-compactor",
     label: "Audit log compactor",
@@ -311,6 +341,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "audit-log-compactor"
   },
+
   {
     id: "fact-integrity-checker",
     label: "Fact integrity checker",
@@ -319,6 +350,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "fact-integrity-checker"
   },
+
   {
     id: "token-budget-enforcer",
     label: "Token budget enforcer",
@@ -327,6 +359,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "token-budget-enforcer"
   },
+
   {
     id: "prompt-injection-watchdog",
     label: "Prompt injection watchdog",
@@ -335,6 +368,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "prompt-injection-watchdog"
   },
+
   {
     id: "reproducibility-guard",
     label: "Reproducibility guard",
@@ -343,6 +377,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "reproducibility-guard"
   },
+
   {
     id: "context-optimizer",
     label: "Context optimizer",
@@ -351,6 +386,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "context-optimizer"
   },
+
   {
     id: "sentiment-drift-watch",
     label: "Sentiment drift watch",
@@ -359,6 +395,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "sentiment-drift-watch"
   },
+
   {
     id: "capability-mapper",
     label: "Capability mapper",
@@ -367,6 +404,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "capability-mapper"
   },
+
   {
     id: "knowledge-vault-pruner",
     label: "Knowledge vault pruner",
@@ -375,6 +413,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "knowledge-vault-pruner"
   },
+
   {
     id: "compliance-sweeper",
     label: "Compliance sweeper",
@@ -383,6 +422,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "compliance-sweeper"
   },
+
   {
     id: "website-factory",
     label: "Website Factory",
@@ -391,6 +431,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "website-factory"
   },
+
   {
     id: "structural-hand-synthesis",
     label: "Structural Hand Synthesis",
@@ -399,6 +440,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "structural-hand-synthesis"
   },
+
   {
     id: "managed-refactor",
     label: "Managed Refactor Hand",
@@ -407,6 +449,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "managed-refactor"
   },
+
   {
     id: "synthetic-reflection-loop",
     label: "Synthetic Reflection Loop",
@@ -415,6 +458,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "synthetic-reflection-loop"
   },
+
   {
     id: "mesh-coordinator",
     label: "Mesh Coordinator Hand",
@@ -423,6 +467,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "mesh-coordinator-hand"
   },
+
   {
     id: "substrate-warden",
     label: "Substrate Integrity Warden",
@@ -431,6 +476,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "substrate-integrity-warden"
   },
+
   {
     id: "nexus-broadcaster",
     label: "Knowledge Broadcaster Hand",
@@ -439,6 +485,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.morningBriefing],
     implementation: "nexus-broadcaster-hand"
   },
+
   {
     id: "nexus-subscriber",
     label: "Knowledge Subscriber Hand",
@@ -447,6 +494,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: [scheduledMaintenanceCrons.maintenance],
     implementation: "nexus-subscriber-hand"
   },
+
   {
     id: "demiurge-meta-hand",
     label: "Demiurge Meta-Hand",
@@ -456,6 +504,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     implementation: "demiurge-meta-hand",
     run: runDemiurgeMetaHand
   },
+
   {
     id: "sovereign-rebalance",
     label: "Sovereign Rebalance Hand",
@@ -465,6 +514,7 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     implementation: "sovereign-rebalance",
     run: runSovereignRebalanceHand
   },
+
   {
     id: "ethics-alignment",
     label: "Ethics Alignment Hand",
@@ -473,5 +523,25 @@ export const bundledHandDefinitions: readonly BundledHandDefinition[] = [
     scheduleCrons: ["0 3 * * *"],
     implementation: "ethics-alignment",
     run: runEthicsAlignmentHand
+  },
+
+  {
+    id: "isolate-sentinel",
+    label: "Isolate Sentinel Hand",
+    description: "Autonomously monitors telemetric pulses from managed projects and triggers self-healing or structural refactors.",
+    runtime: "cloudflare-cron",
+    scheduleCrons: ["*/15 * * * *"],
+    implementation: "isolate-sentinel",
+    run: runIsolateSentinelHand
+  },
+
+  {
+    id: "isolate-onboarding",
+    label: "Isolate Onboarding Hand",
+    description: "Autonomously onboards new isolates by injecting telemetry bridges and registering structural facts.",
+    runtime: "manual",
+    scheduleCrons: [],
+    implementation: "isolate-onboarding",
+    run: runIsolateOnboardingHand
   }
 ];

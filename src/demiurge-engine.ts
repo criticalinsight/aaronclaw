@@ -8,6 +8,54 @@ export interface HandSynthesisRequest {
   scheduleCrons: string[];
 }
 
+export interface AccessPolicyDSL {
+  version: string;
+  defaultAction: "allow" | "deny";
+  rules: {
+    pathPattern: string;
+    allowRoles?: string[];
+    denyRoles?: string[];
+    allowUnauthenticated?: boolean;
+  }[];
+}
+
+/**
+ * Evaluates whether a request should be allowed based on policy and current context.
+ */
+export function evaluateDemiurgeAccess(policy: AccessPolicyDSL, path: string, role?: string): boolean {
+  for (const rule of policy.rules) {
+    const pattern = rule.pathPattern.replace(/\*/g, ".*");
+    const regex = new RegExp(`^${pattern}$`);
+
+    if (regex.test(path)) {
+      // 1. Check denyRoles first
+      if (role && rule.denyRoles?.includes(role)) {
+        return false;
+      }
+
+      // 2. Check allowUnauthenticated
+      if (!role && rule.allowUnauthenticated) {
+        return true;
+      }
+
+      // 3. Check allowRoles
+      if (role && rule.allowRoles) {
+        if (rule.allowRoles.includes(role)) {
+            return true;
+        } else {
+            // Rule matches path but role is not allowed. 
+            // In a strict ordering system, this is usually a deny.
+            return false;
+        }
+      }
+
+      // If no roles specified but path matched and it's not unauthenticated, it hits the next rule or default.
+    }
+  }
+
+  return policy.defaultAction === "allow";
+}
+
 export class DemiurgeEngine {
   constructor(private env: any) {}
 

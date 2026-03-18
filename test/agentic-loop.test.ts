@@ -1,28 +1,27 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { SessionRuntime } from "../src/session-runtime";
 import { AaronDbEdgeSessionRepository } from "../src/session-state";
 
 type Env = any;
 
 // Mocking dependencies
-vi.mock("../src/hands-runtime", () => ({
-  triggerBundledHandRunManual: vi.fn(),
-  listBundledHands: vi.fn()
-}));
-
-vi.mock("../src/knowledge-vault", () => ({
-  queryKnowledgeVault: vi.fn(() => Promise.resolve({ matches: [], source: "mock" })),
-  expandSemanticTerms: vi.fn(() => Promise.resolve(["mocked term"])),
-  buildSemanticVector: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
-  scoreTermOverlap: vi.fn(() => 0.5),
-  safeVectorScore: vi.fn(() => 0.5),
-  roundScore: vi.fn(() => 0.5)
-}));
+import * as handsRuntime from "../src/hands-runtime";
+import * as knowledgeVault from "../src/knowledge-vault";
 
 describe("SessionRuntime Agentic Loop", () => {
-  it("should execute a tool call and re-invoke the assistant", async () => {
-    const { triggerBundledHandRunManual } = await import("../src/hands-runtime");
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
 
+  it("should execute a tool call and re-invoke the assistant", async () => {
+    vi.spyOn(knowledgeVault, "queryKnowledgeVault").mockResolvedValue({ matches: [], source: "d1-compat" });
+    vi.spyOn(knowledgeVault, "expandSemanticTerms").mockResolvedValue(["mocked term"]);
+    vi.spyOn(knowledgeVault, "buildSemanticVector").mockResolvedValue([0.1, 0.2, 0.3]);
+    vi.spyOn(knowledgeVault, "scoreTermOverlap").mockReturnValue(0.5);
+    vi.spyOn(knowledgeVault, "safeVectorScore").mockReturnValue(0.5);
+    vi.spyOn(knowledgeVault, "roundScore").mockReturnValue(0.5);
+    
     const mockAiRun = vi.fn().mockImplementation((model: string, input: any) => {
       if (model.includes("bge-small")) {
         return Promise.resolve({ data: [new Array(384).fill(0.1)] });
@@ -54,10 +53,10 @@ describe("SessionRuntime Agentic Loop", () => {
       }
     });
 
-    (triggerBundledHandRunManual as any).mockResolvedValue({
-      status: "triggered",
-      handId: "website-factory"
-    });
+    vi.spyOn(handsRuntime, "triggerBundledHandRunManual").mockResolvedValue({
+      status: "active",
+      id: "website-factory"
+    } as any);
 
     const storedFacts: any[] = [];
     const mockDb = {
@@ -145,7 +144,7 @@ describe("SessionRuntime Agentic Loop", () => {
     const body: any = await response.json();
 
     // Verify tool execution was called
-    expect(triggerBundledHandRunManual).toHaveBeenCalledWith(expect.objectContaining({
+    expect(handsRuntime.triggerBundledHandRunManual).toHaveBeenCalledWith(expect.objectContaining({
       handId: "website-factory",
       input: { prompt: "dark mode photographer" }
     }));

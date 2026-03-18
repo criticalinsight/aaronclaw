@@ -7,7 +7,7 @@ const workflow = readFileSync(workflowPath, "utf8");
 
 describe("deploy-on-push workflow", () => {
   it("triggers on pushes to the deployment branch", () => {
-    expect(workflow).toMatch(/on:\s*\n\s+push:\s*\n\s+branches:\s*\n\s+- plan-cloudflare-openclaw/);
+    expect(workflow).toMatch(/on:\s*\n\s+push:\s*\n\s+branches:\s*\n\s+- main/);
   });
 
   it("validates before deploying", () => {
@@ -16,10 +16,10 @@ describe("deploy-on-push workflow", () => {
     expect(workflow).toContain("environment: production");
     expect(workflow).toContain("needs: validate");
     expect(workflow.indexOf("validate:")).toBeLessThan(workflow.indexOf("deploy:"));
-    expect(workflow).toContain("npm run validate:config");
-    expect(workflow).toContain("npm run typecheck");
-    expect(workflow).toContain("npm test");
-    expect(workflow).toContain("npm run deploy:dry-run");
+    expect(workflow).toContain("bun run validate:config");
+    expect(workflow).toContain("bun run typecheck");
+    expect(workflow).toContain("bun run test");
+    expect(workflow).toContain("bun run deploy:dry-run");
   });
 
   it("deploys through the existing Wrangler path with explicit safety checks", () => {
@@ -27,8 +27,8 @@ describe("deploy-on-push workflow", () => {
     expect(workflow).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(workflow).toContain("AARONCLAW_D1_DATABASE_ID");
     expect(workflow).toContain("Missing required GitHub environment secret");
-    expect(workflow).toContain("wrangler d1 migrations apply");
-    expect(workflow).toContain("npm run deploy");
+    expect(workflow).toContain("bun x wrangler d1 migrations apply");
+    expect(workflow).toContain("bun run deploy");
     expect(workflow).toContain("concurrency:");
   });
 });

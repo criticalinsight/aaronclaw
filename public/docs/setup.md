@@ -4,8 +4,8 @@ This is the fastest path to a working local AaronClaw instance.
 
 ## What you need
 
-- A current Node.js install that can run the checked-in npm + Wrangler toolchain.
-- `npm` (the repo ships with `package-lock.json` and npm scripts).
+- A current Bun install.
+- `bun` (the repo ships with `bun.lockb` and bun scripts).
 - A Cloudflare login only if you plan to deploy or use remote D1 resources.
 
 The repo does not pin a Node version with an `.nvmrc` or `engines` field, so usea recent Node release that works with Wrangler 4.
@@ -13,7 +13,7 @@ The repo does not pin a Node version with an `.nvmrc` or `engines` field, so use
 ## One-time install
 
 ```sh
-npm install
+bun install
 ```
 
 ## Prepare the local D1 database
@@ -26,19 +26,19 @@ The checked-in `wrangler.jsonc` is intentionally local-first:
 Apply the local migration once before first use:
 
 ```sh
-wrangler d1 migrations apply aaronclaw-aarondb --local
+bun run wrangler d1 migrations apply aaronclaw-aarondb --local
 ```
 
 Optionally confirm the checked-in config still matches that setup:
 
 ```sh
-npm run validate:config
+bun run validate:config
 ```
 
 ## Start the Worker
 
 ```sh
-npm run dev
+bun run dev
 ```
 
 Open the local Worker URL that Wrangler prints.

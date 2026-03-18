@@ -168,7 +168,7 @@ export async function getEconomosMetrics(env: any): Promise<EconomosMetrics> {
  */
 export async function canRunCrucible(env: any): Promise<boolean> {
   // Use exports to allow ViTest to intercept the call
-  const metrics = await exports.getEconomosMetrics(env);
+  const metrics = await getEconomosMetrics(env);
   
   if (metrics.overallEfficiencyScore < 80) {
     return false;
@@ -188,13 +188,21 @@ export async function canRunCrucible(env: any): Promise<boolean> {
 /**
  * 🧙🏾‍♂️ Economos Gating for Evolution (Phase 23).
  * Meta-circular evolution must be economically sustainable. 
+ * Prevents complected growth by checking architectural entropy.
  */
 export async function canRunEvolution(env: any): Promise<boolean> {
-  const metrics = await exports.getEconomosMetrics(env);
+  const metrics = await getEconomosMetrics(env);
   
-  // Hard gate: Efficiency score must be high to justify the cost of evolution.
+  // Hard gate 1: Efficiency score must be high.
   if (metrics.overallEfficiencyScore < 85) {
     console.warn(`⚠️ Economos: Efficiency score ${metrics.overallEfficiencyScore} is too low for evolution.`);
+    return false;
+  }
+
+  // Hard gate 2: Architectural Entropy (Stateful Places) must be bounded.
+  // Evolution in a complected system is high risk.
+  if (metrics.totalStatefulPlaces > 500) {
+    console.warn(`⚠️ Economos: Architectural entropy (${metrics.totalStatefulPlaces}) too high. De-complect before evolving.`);
     return false;
   }
 

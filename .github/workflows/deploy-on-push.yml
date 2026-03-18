@@ -29,11 +29,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: npm
+          bun-version: latest
 
       - name: Check required deploy secrets
         shell: bash
@@ -51,19 +50,19 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Validate checked-in Wrangler config
-        run: npm run validate:config
+        run: bun run validate:config
 
       - name: Typecheck application code
-        run: npm run typecheck
+        run: bun run typecheck
 
       - name: Run tests
-        run: npm test
+        run: bun run test
 
       - name: Dry-run deploy with generated config
-        run: npm run deploy:dry-run
+        run: bun run deploy:dry-run
 
   deploy:
     name: Apply migrations and deploy
@@ -75,11 +74,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 22
-          cache: npm
+          bun-version: latest
 
       - name: Check required deploy secrets
         shell: bash
@@ -97,14 +95,14 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Render deploy config
-        run: npm run deploy:prep
+        run: bun run deploy:prep
 
       - name: Apply remote D1 migrations
         shell: bash
-        run: npx wrangler d1 migrations apply "${AARONCLAW_D1_DATABASE_NAME:-aaronclaw-aarondb}" --remote --config .wrangler/deploy/wrangler.jsonc
+        run: bun x wrangler d1 migrations apply "${AARONCLAW_D1_DATABASE_NAME:-aaronclaw-aarondb}" --remote --config .wrangler/deploy/wrangler.jsonc
 
       - name: Deploy Worker
-        run: npm run deploy
+        run: bun run deploy

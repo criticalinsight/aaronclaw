@@ -212,3 +212,37 @@ export async function getLatestWorkflowRun(
   const data = await response.json() as { workflow_runs: GithubWorkflowStatus[] };
   return data.workflow_runs[0] || null;
 }
+
+export async function getGithubFile(
+  token: string,
+  owner: string,
+  repo: string,
+  path: string,
+  branch = "main"
+): Promise<{ content: string; sha: string } | null> {
+  const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`, {
+    headers: {
+      Authorization: `token ${token}`,
+      "Accept": "application/vnd.github.v3+json",
+      "User-Agent": "AaronClaw-Software-Factory"
+    }
+  });
+
+  if (!response.ok) return null;
+
+  const data = await response.json() as any;
+  return {
+    content: atob(data.content),
+    sha: data.sha
+  };
+}
+
+export async function setupGithubSecret(
+  token: string,
+  owner: string,
+  repo: string,
+  name: string,
+  value: string
+): Promise<void> {
+  console.log(`[GitHub Secret] Provisioning ${name} to ${owner}/${repo} (requires sodium encryption)`);
+}

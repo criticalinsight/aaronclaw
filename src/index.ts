@@ -243,6 +243,42 @@ async function handleManagedProjectRoute(request: Request, env: Env): Promise<Re
   }
 }
 
+async function handleOnboardRoute(request: Request, env: Env): Promise<Response> {
+  // 🧙🏾‍♂️ AaronClaw Phase 24: Autonomous Onboarding Trigger.
+  try {
+    if (request.method !== "POST") {
+      return json({ error: "method not allowed", methods: ["POST"] }, 405);
+    }
+
+    const input = await request.json() as { repoUrl: string, projectId?: string };
+    if (!input.repoUrl) {
+      return json({ error: "repoUrl is required" }, 400);
+    }
+
+    // Derive projectId from repo name if not provided
+    const derivedProjectId = input.projectId || input.repoUrl.split("/").pop()?.replace(".git", "") || "unknown-project";
+
+    const { triggerBundledHandRunManual } = await import("./hands-runtime");
+    const result = await triggerBundledHandRunManual({
+      env,
+      handId: "isolate-onboarding",
+      input: { 
+        repoUrl: input.repoUrl,
+        projectId: derivedProjectId
+      }
+    });
+
+    return json({ 
+      status: "onboarding-initiated", 
+      handId: "isolate-onboarding",
+      state: result,
+      message: "The isolate-onboarding hand has been dispatched to coordinate telemetry injection and registration."
+    });
+  } catch (error) {
+    return json({ error: error instanceof Error ? error.message : String(error) }, 500);
+  }
+}
+
 async function handlePanopticonIngestRoute(request: Request, env: Env): Promise<Response> {
   // 🧙🏾‍♂️ AaronClaw Phase 18: Panopticon - Ingesting external state as immutable facts.
   try {
@@ -743,6 +779,30 @@ async function handleTelegramCommand(input: {
             return;
         }
 
+        // 🧙🏾‍♂️ Onboard: Autonomous Project Ingestion
+        if (command === "/onboard") {
+            if (!args) {
+                await reply(`${SCHEMATIC_EMOJIS.WARNING} Please provide a repo URL: \`/onboard https://github.com/user/repo\``, { parseMode: "MarkdownV2" });
+                return;
+            }
+
+            const onboardTask = (async () => {
+                try {
+                    const { triggerBundledHandRunManual } = await import("./hands-runtime");
+                    await triggerBundledHandRunManual({
+                        env,
+                        handId: "isolate-onboarding",
+                        input: { repoUrl: args }
+                    });
+                    await reply(`${SCHEMATIC_EMOJIS.SUCCESS} Onboarding initiated for \`${escapeMarkdown(args)}\`\\. I am currently injecting telemetry and registering the project structure\\.`, { parseMode: "MarkdownV2" });
+                } catch (e: any) {
+                    await reply(`${SCHEMATIC_EMOJIS.FAILURE} Onboarding failed: ${escapeMarkdown(e.message)}`, { parseMode: "MarkdownV2" });
+                }
+            })();
+            if (ctx) ctx.waitUntil(onboardTask);
+            return;
+        }
+
         // 🧙🏾‍♂️ Unknown Command
         if (command) {
             await reply(`${SCHEMATIC_EMOJIS.FAILURE} *Command not recognized:* ${escapeMarkdown(command)}\n\nUse /start to see available factory operations\\.`, { parseMode: "MarkdownV2" });
@@ -1166,6 +1226,11 @@ export default {
       return handleManagedProjectRoute(request, env);
     }
 
+    if (url.pathname === "/api/onboard") {
+      if (!isAuthorized(request, env)) return unauthorized();
+      return handleOnboardRoute(request, env);
+    }
+
     if (url.pathname === "/api/spawn") {
       if (!isAuthorized(request, env)) return unauthorized();
       return handleSpawnRoute(request, env);
@@ -1367,7 +1432,8 @@ export default {
           "POST /api/sessions/:id/chat",
           "POST /api/sessions/:id/messages",
           "POST /api/sessions/:id/tool-events",
-          "GET /api/sessions/:id/recall?q=..."
+          "GET /api/sessions/:id/recall?q=...",
+          "POST /api/onboard"
         ]
       },
       404

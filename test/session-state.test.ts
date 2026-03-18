@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { defaultDocsContract, runScheduledDocsDriftReview } from "../src/docs-drift";
 import worker, { SessionRuntime } from "../src/index";
 import { queryKnowledgeVault } from "../src/knowledge-vault";
@@ -376,8 +376,19 @@ function createEnv(options: {
   return { env, database };
 }
 
+let originalFetch: typeof globalThis.fetch;
+
 afterEach(() => {
+  vi.clearAllMocks();
+  vi.resetAllMocks();
   vi.restoreAllMocks();
+  if (originalFetch) {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+beforeAll(() => {
+  originalFetch = globalThis.fetch;
 });
 
 async function seedHistoricalSession(database: FakeD1Database, sessionId: string, content: string) {
@@ -534,7 +545,7 @@ describe("AaronDbEdgeSessionRepository", () => {
 
 describe("knowledge vault", () => {
   it("returns Vectorize-backed matches from historical D1 fact logs when the binding exists", async () => {
-    const { env, database } = createEnv({ vectorizeMode: "success" });
+    const { env, database } = createEnv({ vectorizeMode: "success", aiMode: "success" });
 
     await seedHistoricalSession(
       database,
@@ -557,7 +568,7 @@ describe("knowledge vault", () => {
   });
 
   it("falls back to local D1 compatibility ranking when Vectorize is unavailable", async () => {
-    const { env, database } = createEnv({ vectorizeMode: "throw" });
+    const { env, database } = createEnv({ vectorizeMode: "throw", aiMode: "success" });
 
     await seedHistoricalSession(
       database,
@@ -1972,7 +1983,7 @@ describe("worker session routes", () => {
     const { env, database } = createEnv({ appAuthToken: "letmein" });
 
     // Phase 6 improvement: Mock fetch to stabilize the recursive evolution spawn path in tests
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true }) as any;
 
     await seedHistoricalSession(
       database,

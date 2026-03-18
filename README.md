@@ -17,14 +17,14 @@ The current live deployment is:
 
 Use the smallest doc that answers your question:
 
-- [`docs/setup.md`](docs/setup.md) — local install, first run, and browser flow.
-- [`docs/deployment.md`](docs/deployment.md) — Cloudflare deploy path,
+- [`public/docs/setup.md`](public/docs/setup.md) — local install, first run, and browser flow.
+- [`public/docs/deployment.md`](public/docs/deployment.md) — Cloudflare deploy path,
   auth/security posture, operational checks, and troubleshooting.
-- [`docs/runtime.md`](docs/runtime.md) — HTTP routes, browser control surface,
+- [`public/docs/runtime.md`](public/docs/runtime.md) — HTTP routes, browser control surface,
   session behavior, and assistant runtime semantics.
-- [`docs/state-model.md`](docs/state-model.md) — the AaronDB-style fact model,
+- [`public/docs/state-model.md`](public/docs/state-model.md) — the AaronDB-style fact model,
   replay flow, recall semantics, and why Durable Objects stay lightweight.
-- [`docs/architecture.md`](docs/architecture.md) — architecture decision and
+- [`public/docs/architecture.md`](public/docs/architecture.md) — architecture decision and
   reuse boundary relative to `cloudflare/moltworker`.
 
 ## Current shipped posture
@@ -64,10 +64,10 @@ multi-user deployment.
 ## Quick local loop
 
 ```sh
-npm install
-wrangler d1 migrations apply aaronclaw-aarondb --local
-npm run validate:config
-npm run dev
+bun install
+bun run wrangler d1 migrations apply aaronclaw-aarondb --local
+bun run validate:config
+bun run dev
 ```
 
 Then:
@@ -81,21 +81,21 @@ Then:
 Use these verification commands when you need a quick confidence pass:
 
 ```sh
-npm run typecheck
-npm test
+bun run typecheck
+bun test
 ```
 
-See [`docs/setup.md`](docs/setup.md) for the full first-run path.
+See [`public/docs/setup.md`](public/docs/setup.md) for the full first-run path.
 
 ## Quick Cloudflare deploy loop
 
 ```sh
-wrangler d1 create aaronclaw-aarondb
+bun run wrangler d1 create aaronclaw-aarondb
 export AARONCLAW_D1_DATABASE_ID=<uuid-from-create>
-wrangler d1 migrations apply aaronclaw-aarondb --remote
-npm run deploy:prep
-npm run deploy:dry-run
-npm run deploy
+bun run wrangler d1 migrations apply aaronclaw-aarondb --remote
+bun run deploy:prep
+bun run deploy:dry-run
+bun run deploy
 ```
 
 Optional but recommended for anything non-public:
@@ -104,7 +104,7 @@ Optional but recommended for anything non-public:
 wrangler secret put APP_AUTH_TOKEN
 ```
 
-See [`docs/deployment.md`](docs/deployment.md) for the complete sequence,
+See [`public/docs/deployment.md`](public/docs/deployment.md) for the complete sequence,
 validation notes, and troubleshooting guidance.
 
 Rich Hickey warning: this manual Wrangler path is the only deploy path verified
@@ -175,7 +175,7 @@ Structural and Procedural intelligence, see the:
 - `POST /telegram/webhook` is an optional Telegram ingress that maps Telegram
   chat/user pairs onto the same session runtime.
 
-See [`docs/runtime.md`](docs/runtime.md) for request semantics and browser usage.
+See [`public/docs/runtime.md`](public/docs/runtime.md) for request semantics and browser usage.
 
 ## Baseline and reuse boundary
 

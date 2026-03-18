@@ -69,22 +69,52 @@ export async function runKnowledgeBroadcaster(env: Env, timestamp: string): Prom
 /**
  * 🧙🏾‍♂️ Structured Distillation: Removes concrete identities and extracts the structural essence.
  */
-async function distillPattern(context: JsonObject): Promise<JsonObject> {
-  // 🧙🏾‍♂️ Phase 21 MVP: Rule-based abstraction.
-  // In future, this calls an LLM to "De-complect and Anonymize"
+export async function distillPattern(context: JsonObject): Promise<JsonObject> {
+  // 🧙🏾‍♂️ Structural Essence Extraction: 
+  // We extract the 'shape' of the change, de-complecting it from specific line numbers or file paths.
   const blueprint: JsonObject = {
     category: context.category,
-    structuralEssence: context.proposedFix,
-    complexityReductionRatio: context.complexityImpact === "low" ? 0.2 : (context.complexityImpact === "medium" ? 0.5 : 0.8),
-    universalTags: ["de-complecting", context.category as string]
+    structuralSignature: generateStructuralSignature(context.proposedFix as string),
+    complexityReductionRatio: calculateComplexityYield(context),
+    universalTags: deriveUniversalTags(context),
+    synthesizedAt: new Date().toISOString()
   };
 
-  // Explicitly remove local context
-  delete (blueprint as any).filePath;
-  delete (blueprint as any).lineNumbers;
-  delete (blueprint as any).author;
-  
   return blueprint;
+}
+
+/**
+ * 🧙🏾‍♂️ Generates a structural signature to identify similar de-complecting patterns.
+ */
+function generateStructuralSignature(code: string): string {
+  // Simple signature: remove whitespace, comments, and normalize identifiers to types where possible
+  // In future, this would be an AST-based hash.
+  return code
+    .replace(/\/\/.*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100); // Take the head of the structural change
+}
+
+/**
+ * 🧙🏾‍♂️ Calculates the yield of a complexity reduction.
+ */
+function calculateComplexityYield(context: JsonObject): number {
+  const impact = context.complexityImpact as string;
+  if (impact === "low") return 0.2;
+  if (impact === "medium") return 0.5;
+  if (impact === "high") return 0.8;
+  return 0.1;
+}
+
+/**
+ * 🧙🏾‍♂️ Derives universal tags for global knowledge broadcast.
+ */
+function deriveUniversalTags(context: JsonObject): string[] {
+  const tags = ["de-complecting"];
+  if (context.category) tags.push(context.category as string);
+  if (context.complexityImpact === "high") tags.push("architectural-pivot");
+  return [...new Set(tags)];
 }
 
 /**

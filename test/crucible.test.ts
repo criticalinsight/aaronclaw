@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { EconomosBudgetExceededError, runAdversarialSimulation } from "../src/crucible-engine";
 import * as economosEngine from "../src/economos-engine";
+import { afterEach } from "vitest";
 
 describe("Crucible Engine (Phase 19)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("rejects simulation if Economos gate returns false", async () => {
     vi.spyOn(economosEngine, "canRunCrucible").mockResolvedValue(false);
 

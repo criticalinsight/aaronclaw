@@ -38,6 +38,8 @@ import { runKnowledgeBroadcaster, runKnowledgeSubscriber } from "./nexus-engine"
 import { runDemiurgeMetaHand } from "./hands/demiurge-meta-hand";
 import { runSovereignRebalanceHand } from "./hands/sovereign-rebalance-hand";
 import { runEthicsAlignmentHand } from "./hands/ethics-alignment-hand";
+import { runIsolateSentinelHand } from "./hands/isolate-sentinel-hand";
+import { runIsolateOnboardingHand } from "./hands/isolate-onboarding-hand";
 
 const HAND_SESSION_PREFIX = "hand:";
 const HAND_LIFECYCLE_TOOL = "hand-lifecycle";
@@ -381,15 +383,24 @@ async function executeBundledHandRun(input: {
       });
 
       // Recursive Evolution: Spawn improved agents from "Promoted" proposals
-      const recursiveEvolution = await triggerRecursiveEvolution({
-        env: sandboxedEnv,
-        timestamp: input.timestamp
-      });
+      // 🧙🏾‍♂️ Gated by Economos: Evolution must be sustainable.
+      const { canRunEvolution } = await import("./economos-engine");
+      const isSustainable = await canRunEvolution(sandboxedEnv);
+      
+      let recursiveEvolution = { promotedCount: 0, spawnedAgentCount: 0 };
+      if (isSustainable) {
+        recursiveEvolution = await triggerRecursiveEvolution({
+          env: sandboxedEnv,
+          timestamp: input.timestamp
+        });
+      } else {
+        console.warn("🧙🏾‍♂️ Hand: Recursive evolution skipped due to Economos sustainability gate.");
+      }
 
       await repository.appendToolEvent({
         timestamp: input.timestamp,
         toolName: HAND_RUN_TOOL,
-        summary: `${input.definition.label} reviewed ${proposalReview.reviewedSignalCount} signals, wrote ${proposalReview.generatedProposalCount + reflexiveAudit.generatedProposalCount} proposals, evaluated ${shadowEvaluation.evaluatedProposalCount} candidates, and spawned ${recursiveEvolution.spawnedAgentCount} improved agent(s) for cron ${input.cron}.`,
+        summary: `${input.definition.label} reviewed ${proposalReview.reviewedSignalCount} signals, wrote ${proposalReview.generatedProposalCount + reflexiveAudit.generatedProposalCount} proposals, evaluated ${shadowEvaluation.evaluatedProposalCount} candidates, and spawned ${recursiveEvolution.spawnedAgentCount} improved agent(s) for cron ${input.cron}.${isSustainable ? "" : " (Evolution gated by Economos)"}`,
         metadata: {
           action: "run",
           awaitingApprovalCount: shadowEvaluation.awaitingApprovalCount,
@@ -403,6 +414,7 @@ async function executeBundledHandRun(input: {
           skippedDuplicateProposalCount: proposalReview.skippedDuplicateProposalCount,
           promotedProposalCount: recursiveEvolution.promotedCount,
           spawnedAgentCount: recursiveEvolution.spawnedAgentCount,
+          evolutionGated: !isSustainable,
           latencyAnomalies: reflexiveAudit.latencyAnomalies,
           errorClusters: reflexiveAudit.errorClusters,
           status: "succeeded",
@@ -413,10 +425,11 @@ async function executeBundledHandRun(input: {
             outcome: "succeeded",
             timestamp: input.timestamp,
             handId: input.definition.id,
-            detail: `${input.definition.label} completed successfully with recursive evolution.`,
+            detail: `${input.definition.label} completed successfully.${isSustainable ? " Recursive evolution triggered." : " Evolution gated by Economos."}`,
             extra: {
               cron: input.cron,
               spawnedAgentCount: recursiveEvolution.spawnedAgentCount,
+              evolutionGated: !isSustainable,
               latencyAnomalies: reflexiveAudit.latencyAnomalies,
               errorClusters: reflexiveAudit.errorClusters
             }
@@ -1110,6 +1123,23 @@ async function executeBundledHandRun(input: {
             handId: input.definition.id,
             detail: `${input.definition.label} performed ethics audit. Purity Score: ${result.score}`
           })
+        }
+      });
+    }
+
+    if (input.definition.implementation === "isolate-onboarding") {
+      const result = await runIsolateOnboardingHand(sandboxedEnv, input.input);
+      await repository.appendToolEvent({
+        timestamp: input.timestamp,
+        toolName: HAND_RUN_TOOL,
+        summary: `Isolate Onboarding Hand: ${result.message}`,
+        metadata: {
+          action: "run",
+          cron: input.cron,
+          outcome: result.status === "success" ? "succeeded" : "failed",
+          timestamp: input.timestamp,
+          handId: input.definition.id,
+          detail: result.message
         }
       });
       return;
